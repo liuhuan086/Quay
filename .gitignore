@@ -1,0 +1,48 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Xcode build output
+build/
+DerivedData/
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+
+# Xcode user state
+*.xcuserstate
+xcuserdata/
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+
+# App/package artifacts
+*.app
+*.ipa
+*.pkg
+*.dmg
+*.zip
+
+# IDE/editor local files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local tool state
+.claude/settings.local.json
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
