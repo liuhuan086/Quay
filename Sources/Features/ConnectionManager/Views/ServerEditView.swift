@@ -130,22 +130,30 @@ struct ServerEditView: View {
 
     // MARK: - Basic Tab
     @ViewBuilder var basicTab: some View {
-        // Protocol — centered within formRow
-        formRow("协议") {
+        // Protocol
+        protocolPickerRow
+        basicCredentialsAndMetadata
+    }
+
+    private var protocolPickerRow: some View {
+        ZStack {
             HStack {
-                Spacer()
-                Picker("", selection: $protocol_) {
-                    ForEach(ConnectionProtocol.allCases) { p in
-                        Label(p.rawValue, systemImage: p.sfSymbol).tag(p)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
+                Text("协议").frame(width: 72, alignment: .trailing)
+                    .foregroundColor(.secondary).font(.system(size: 12))
                 Spacer()
             }
+            Picker("", selection: $protocol_) {
+                ForEach(ConnectionProtocol.allCases) { p in
+                    Label(p.rawValue, systemImage: p.sfSymbol).tag(p)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
         }
+    }
 
+    @ViewBuilder var basicCredentialsAndMetadata: some View {
         // Host + Port
         HStack(alignment: .top, spacing: 12) {
             formRow("主机", width: 360) {

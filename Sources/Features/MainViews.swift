@@ -135,7 +135,9 @@ struct SidebarView: View {
                     }
                     lastSelectedID = newID
                     lastSelectedTime = now
-                    appState.selectedServerID = newID
+                    DispatchQueue.main.async {
+                        appState.selectedServerID = newID
+                    }
                 }
             )) {
                 ForEach(grouped, id: \.0) { group, servers in
