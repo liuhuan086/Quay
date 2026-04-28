@@ -339,6 +339,9 @@ struct ServerEditView: View {
         p.canChooseFiles = true; p.canChooseDirectories = false
         p.directoryURL = URL(fileURLWithPath: NSHomeDirectory() + "/.ssh")
         p.message = "选择 SSH 私钥文件"
-        if p.runModal() == .OK { sshKeyPath = p.url?.path ?? "" }
+        p.begin { response in
+            guard response == .OK else { return }
+            sshKeyPath = p.url?.path ?? ""
+        }
     }
 }

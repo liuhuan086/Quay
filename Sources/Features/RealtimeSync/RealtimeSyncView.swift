@@ -1,6 +1,7 @@
 // RealtimeSyncView.swift — Real-time sync with FSEvents
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
 
 // MARK: - SyncManager (actor, owns the watcher)
 actor SyncManager {
@@ -237,15 +238,19 @@ struct RealtimeSyncView: View {
                     TextField("拖入文件夹或点击选择", text: $localPath)
                         .textFieldStyle(.roundedBorder)
                         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                            _ = providers.first?.loadObject(ofClass: URL.self) { url, _ in
-                                if let url { DispatchQueue.main.async { localPath = url.path } }
+                            providers.first?.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                                guard let url = fileURL(from: item) else { return }
+                                DispatchQueue.main.async { localPath = url.path }
                             }
                             return true
                         }
                     Button("选择…") {
                         let p = NSOpenPanel()
                         p.canChooseFiles = false; p.canChooseDirectories = true
-                        if p.runModal() == .OK { localPath = p.url?.path ?? "" }
+                        p.begin { response in
+                            guard response == .OK else { return }
+                            localPath = p.url?.path ?? ""
+                        }
                     }
                 }
             }
@@ -291,6 +296,21 @@ struct RealtimeSyncView: View {
         .padding(24)
         .frame(width: 500, height: 420)
     }
+}
+
+private func fileURL(from item: NSSecureCoding?) -> URL? {
+    if let url = item as? URL { return url }
+    if let data = item as? Data,
+       let text = String(data: data, encoding: .utf8) {
+        return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    if let text = item as? String {
+        return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    if let text = item as? NSString {
+        return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    return nil
 }
 
 // MARK: - Watcher Row

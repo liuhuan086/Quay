@@ -44,7 +44,7 @@ final class ServerRepository: @unchecked Sendable {
 }
 
 // MARK: - NotificationService
-import UserNotifications
+@preconcurrency import UserNotifications
 
 final class NotificationService: Sendable {
     func sendTransferComplete(fileName: String, direction: TransferDirection) {
@@ -57,10 +57,26 @@ final class NotificationService: Sendable {
         send(title: "实时同步", body: "\(fileName) → \(remotePath)", sound: nil)
     }
     private func send(title: String, body: String, sound: UNNotificationSound?) {
+        let center = UNUserNotificationCenter.current()
         let c = UNMutableNotificationContent()
         c.title = title; c.body = body
         if let s = sound { c.sound = s }
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil)
+
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                center.add(request)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    guard granted else { return }
+                    center.add(request)
+                }
+            case .denied:
+                break
+            @unknown default:
+                break
+            }
+        }
     }
 }

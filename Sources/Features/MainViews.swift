@@ -28,7 +28,6 @@ struct SwiftFTPApp: App {
 // MARK: - AppDelegate
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         UNUserNotificationCenter.current().delegate = self
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -323,7 +322,7 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.refreshIcon()
+        context.coordinator.scheduleRefreshIcon()
     }
 
     @MainActor
@@ -333,6 +332,8 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
         weak var host: ClickableHostingView<TransferBadgeContent>?
         let popover: NSPopover
         private var cancellable: AnyCancellable?
+        private var refreshScheduled = false
+        private var renderedActiveCount: Int?
 
         init(appState: AppState, badgeState: TransferBadgeState) {
             self.appState = appState
@@ -342,7 +343,9 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
             popover.behavior = .transient
             popover.delegate = self
             cancellable = badgeState.objectWillChange.sink { [weak self] _ in
-                DispatchQueue.main.async { self?.refreshIcon() }
+                Task { @MainActor [weak self] in
+                    self?.scheduleRefreshIcon()
+                }
             }
         }
 
@@ -362,11 +365,23 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
             popover.show(relativeTo: host.bounds, of: host, preferredEdge: .minY)
         }
 
+        func scheduleRefreshIcon() {
+            guard !refreshScheduled else { return }
+            refreshScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.refreshScheduled = false
+                self.refreshIcon()
+            }
+        }
+
         func refreshIcon() {
             guard let host else { return }
             let active = badgeState.activeCount
-            host.rootView = TransferBadgeContent(active: active)
             host.toolTip = active > 0 ? "传输队列（\(active) 进行中）" : "传输队列"
+            guard renderedActiveCount != active else { return }
+            renderedActiveCount = active
+            host.rootView = TransferBadgeContent(active: active)
         }
     }
 }
