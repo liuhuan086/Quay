@@ -119,14 +119,14 @@ final class RemoteFileVM: ObservableObject {
     func createFolder(name: String) async {
         let path = currentPath.hasSuffix("/") ? currentPath + name : currentPath + "/" + name
         do { try await client.createDirectory(path); await refresh() }
-        catch { errorMessage = error.localizedDescription }
+        catch { errorMessage = friendlyMessage(error) }
     }
 
     func deleteSelected() async {
         let toDelete = sortedItems.filter { selectedIDs.contains($0.id) }
         for item in toDelete {
             do { try await client.delete(path: item.path, isDirectory: item.isDirectory) }
-            catch { errorMessage = error.localizedDescription }
+            catch { errorMessage = friendlyMessage(error) }
         }
         selectedIDs.removeAll()
         await refresh()
@@ -136,7 +136,7 @@ final class RemoteFileVM: ObservableObject {
         let dir = (item.path as NSString).deletingLastPathComponent
         let newPath = dir + "/" + name
         do { try await client.rename(from: item.path, to: newPath); await refresh() }
-        catch { errorMessage = error.localizedDescription }
+        catch { errorMessage = friendlyMessage(error) }
     }
 
     private func load(_ path: String) async {
@@ -145,8 +145,12 @@ final class RemoteFileVM: ObservableObject {
             items = try await client.listDirectory(path)
             currentPath = path
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = friendlyMessage(error)
         }
         isLoading = false
+    }
+
+    private func friendlyMessage(_ error: Error) -> String {
+        FTPError.friendly(error).errorDescription ?? error.localizedDescription
     }
 }

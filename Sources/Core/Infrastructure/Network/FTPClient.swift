@@ -48,6 +48,10 @@ public final class FTPClient: AnyFTPClient {
         } else {
             params = .tcp
         }
+        // 给 TCP 设一个较短的连接超时，否则失败时 NWConnection 会一直挂着不抛错
+        if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+            tcp.connectionTimeout = 15
+        }
 
         let conn = NWConnection(
             host: .init(config.host),
@@ -55,38 +59,53 @@ public final class FTPClient: AnyFTPClient {
             using: params
         )
 
-        // Use checked throwing continuation; capture `conn` not `self` to be Sendable
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            // Use a simple flag protected by the continuation itself
-            let box = ContinuationBox(cont)
-            conn.stateUpdateHandler = { state in
-                switch state {
-                case .ready:            box.resume()
-                case .failed(let err):  box.resume(throwing: FTPError.connectionFailed(err.localizedDescription))
-                case .waiting(let err): box.resume(throwing: FTPError.connectionFailed(err.localizedDescription))
-                default: break
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                let box = ContinuationBox(cont)
+                conn.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:            box.resume()
+                    case .failed(let err):  box.resume(throwing: FTPError.friendly(err))
+                    case .waiting:          break
+                    case .cancelled:        box.resume(throwing: FTPError.connectionFailed("连接已被取消"))
+                    default: break
+                    }
                 }
+                conn.start(queue: queue)
+                self.queue.async { self.state.controlConn = conn }
             }
-            conn.start(queue: queue)
-            self.queue.async { self.state.controlConn = conn }
+        } catch {
+            conn.cancel()
+            throw FTPError.friendly(error)
         }
 
-        let welcome = try await readControlLine()
-        guard welcome.hasPrefix("220") else { throw FTPError.badResponse(welcome) }
+        do {
+            let welcome = try await readControlLine()
+            guard welcome.hasPrefix("220") else { throw FTPError.badResponse(welcome) }
 
-        try await sendCtrl("USER \(config.username)")
-        let userResp = try await readControlLine()
+            try await sendCtrl("USER \(config.username)")
+            let userResp = try await readControlLine()
 
-        if userResp.hasPrefix("331") {
-            try await sendCtrl("PASS \(password)")
-            let passResp = try await readControlLine()
-            guard passResp.hasPrefix("230") else { throw FTPError.authenticationFailed }
-        } else if !userResp.hasPrefix("230") {
-            throw FTPError.authenticationFailed
+            if userResp.hasPrefix("331") {
+                try await sendCtrl("PASS \(password)")
+                let passResp = try await readControlLine()
+                guard passResp.hasPrefix("230") else { throw FTPError.authenticationFailed }
+            } else if !userResp.hasPrefix("230") {
+                throw FTPError.authenticationFailed
+            }
+
+            try await sendCtrl("TYPE I");   _ = try await readControlLine()
+            try await sendCtrl("OPTS UTF8 ON"); _ = try? await readControlLine()
+        } catch {
+            // 登录阶段任何失败都应清理底层 socket，避免遗留半开连接
+            conn.cancel()
+            queue.async {
+                self.state.controlConn = nil
+                self.state.isConnected = false
+                self.state.receiveBuffer.removeAll()
+            }
+            throw FTPError.friendly(error)
         }
-
-        try await sendCtrl("TYPE I");   _ = try await readControlLine()
-        try await sendCtrl("OPTS UTF8 ON"); _ = try? await readControlLine()
 
         queue.async { self.state.isConnected = true }
     }
@@ -112,12 +131,13 @@ public final class FTPClient: AnyFTPClient {
             guard r.hasPrefix("150") || r.hasPrefix("125") else {
                 throw FTPError.badResponse(r)
             }
-            _ = try await self.receiveAll(on: dataConn)
+            return try await self.receiveAll(on: dataConn)
         }
         let listing = String(data: data, encoding: .utf8) ?? ""
-        return parseMLSD(listing, base: path).isEmpty
+        let mlsd = parseMLSD(listing, base: path)
+        return mlsd.isEmpty
              ? try await listFallback(path)   // fallback to LIST
-             : parseMLSD(listing, base: path)
+             : mlsd
     }
 
     private func listFallback(_ path: String) async throws -> [RemoteFileItem] {
@@ -125,7 +145,7 @@ public final class FTPClient: AnyFTPClient {
             try await self.sendCtrl("LIST \(path)")
             let r = try await self.readControlLine()
             guard r.hasPrefix("150") || r.hasPrefix("125") else { throw FTPError.badResponse(r) }
-            _ = try await self.receiveAll(on: dataConn)
+            return try await self.receiveAll(on: dataConn)
         }
         let listing = String(data: data, encoding: .utf8) ?? ""
         return parseLIST(listing, base: path)
@@ -283,13 +303,23 @@ public final class FTPClient: AnyFTPClient {
         let r = try await readControlLine()
         guard r.hasPrefix("227") else { throw FTPError.badResponse(r) }
         let (host, port) = try parsePASV(r)
-        let conn = NWConnection(host: .init(host), port: .init(integerLiteral: UInt16(port)), using: .tcp)
+        let params: NWParameters = .tcp
+        if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+            tcp.connectionTimeout = 15
+        }
+        let conn = NWConnection(host: .init(host), port: .init(integerLiteral: UInt16(port)), using: params)
         return try await withCheckedThrowingContinuation { cont in
             let box = ContinuationBox(cont)
             conn.stateUpdateHandler = { st in
                 switch st {
                 case .ready:           box.resume(returning: conn)
-                case .failed(let e):   box.resume(throwing: FTPError.dataConnectionFailed(e.localizedDescription))
+                case .failed(let e):
+                    let mapped = FTPError.friendly(e)
+                    box.resume(throwing: FTPError.dataConnectionFailed(mapped.errorDescription ?? "未知错误"))
+                case .waiting:
+                    break
+                case .cancelled:
+                    box.resume(throwing: FTPError.dataConnectionFailed("连接已被取消"))
                 default: break
                 }
             }
@@ -297,17 +327,18 @@ public final class FTPClient: AnyFTPClient {
         }
     }
 
-    /// Helper to run a data-channel transfer and always read the trailing "226"
-    private func transferData(_ block: (NWConnection) async throws -> Void) async throws -> Data {
-        var captured = Data()
+    /// Helper to run a data-channel transfer and always read the trailing "226".
+    /// The block must read everything it needs from the data connection and return it.
+    private func transferData(_ block: (NWConnection) async throws -> Data) async throws -> Data {
         let dataConn = try await openPASV()
+        let captured: Data
         do {
-            try await block(dataConn)
-            // block is expected to have already received data; re-read if needed
+            captured = try await block(dataConn)
         } catch {
-            dataConn.cancel(); throw error
+            dataConn.cancel()
+            throw error
         }
-        // Read 226 Transfer complete
+        // Read 226 Transfer complete (best-effort)
         _ = try? await readControlLine()
         dataConn.cancel()
         return captured
@@ -339,8 +370,12 @@ public final class FTPClient: AnyFTPClient {
     private func send(data: Data, on conn: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             conn.send(content: data, completion: .contentProcessed { err in
-                if let err { cont.resume(throwing: FTPError.transferFailed(err.localizedDescription)) }
-                else { cont.resume() }
+                if let err {
+                    let friendly = FTPError.friendly(err)
+                    cont.resume(throwing: FTPError.transferFailed(friendly.errorDescription ?? "未知错误"))
+                } else {
+                    cont.resume()
+                }
             })
         }
     }
@@ -366,8 +401,8 @@ public final class FTPClient: AnyFTPClient {
 
     private func recv(from conn: NWConnection, min: Int, max: Int) async throws -> Data {
         try await withCheckedThrowingContinuation { cont in
-            conn.receive(minimumIncompleteLength: min, maximumLength: max) { data, _, isComplete, err in
-                if let err { cont.resume(throwing: err) }
+            conn.receive(minimumIncompleteLength: min, maximumLength: max) { data, _, _, err in
+                if let err { cont.resume(throwing: FTPError.friendly(err)) }
                 else if let data, !data.isEmpty { cont.resume(returning: data) }
                 else { cont.resume(returning: Data()) }
             }

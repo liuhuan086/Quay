@@ -303,8 +303,20 @@ struct ServerEditView: View {
     private func testConnection() {
         testState = .testing
         let portInt = Int(port) ?? protocol_.defaultPort
-        let cfg = ServerConfig(displayName: host, host: host, port: portInt,
-                               username: username, protocol_: protocol_)
+        let cfg = ServerConfig(
+            displayName: host,
+            host: host,
+            port: portInt,
+            username: username,
+            protocol_: protocol_,
+            initialPath: initialPath.isEmpty ? "/" : initialPath,
+            groupName: groupName.isEmpty ? nil : groupName,
+            colorLabel: colorLabel,
+            notes: notes,
+            useSSHKey: useSSHKey,
+            sshKeyPath: sshKeyPath.isEmpty ? nil : sshKeyPath,
+            password: password
+        )
         Task {
             let start = Date()
             let client = ClientFactory.makeClient(for: cfg)
@@ -314,7 +326,8 @@ struct ServerEditView: View {
                 let ms = Int(Date().timeIntervalSince(start) * 1000)
                 testState = .ok(ms: ms)
             } catch {
-                testState = .fail(error.localizedDescription)
+                let friendly = FTPError.friendly(error).errorDescription ?? error.localizedDescription
+                testState = .fail(friendly)
             }
         }
     }

@@ -134,6 +134,14 @@ actor TransferEngine {
     // MARK: - Error handling + auto-retry
     private func handleError(id: UUID, error: Error, password: String) async {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        let friendly = FTPError.friendly(error)
+
+        // 鉴权失败、文件不存在、权限不足、不支持等错误重试也无意义，立即报错
+        if !Self.isRetriable(friendly) {
+            markFailed(id: id, message: friendly.errorDescription ?? "传输失败")
+            return
+        }
+
         if tasks[idx].retryCount < TransferTask.maxRetries {
             tasks[idx].retryCount += 1
             tasks[idx].status = .queued
@@ -143,7 +151,24 @@ actor TransferEngine {
             try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
             drainQueue()
         } else {
-            markFailed(id: id, message: error.localizedDescription)
+            markFailed(id: id, message: friendly.errorDescription ?? "传输失败")
+        }
+    }
+
+    private static func isRetriable(_ error: FTPError) -> Bool {
+        switch error {
+        case .authenticationFailed,
+             .fileNotFound,
+             .permissionDenied,
+             .transferFailed,
+             .unsupported,
+             .sshKeyLoadFailed,
+             .hostKeyMismatch,
+             .resumeNotSupported,
+             .badResponse:
+            return false
+        default:
+            return true
         }
     }
 
@@ -183,4 +208,3 @@ actor TransferEngine {
         onUpdate?(task)
     }
 }
-
