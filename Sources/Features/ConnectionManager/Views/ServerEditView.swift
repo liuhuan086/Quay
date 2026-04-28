@@ -107,7 +107,9 @@ struct ServerEditView: View {
                 switch testState {
                 case .idle: EmptyView()
                 case .testing:
-                    ProgressView().scaleEffect(0.7)
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
                     Text("测试连接中…").foregroundColor(.secondary).font(.caption)
                 case .ok(let ms):
                     Image(systemName: "checkmark.circle.fill").foregroundColor(.green)

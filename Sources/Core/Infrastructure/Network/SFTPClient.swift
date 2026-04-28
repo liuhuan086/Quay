@@ -2,8 +2,8 @@
 // SFTP implementation using Citadel (pure Swift SSH/SFTP library).
 // Swift 6–safe: uses a serial DispatchQueue for state isolation.
 import Foundation
-import Citadel
-import NIOSSH
+@preconcurrency import Citadel
+@preconcurrency import NIOSSH
 import NIO
 import Crypto
 import Darwin
@@ -57,15 +57,8 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
     public func connect(password: String) async throws {
         let authMethod = try makeAuthenticationMethod(password: password)
 
-        // Enable RSA host keys + DiffieHellman key exchange for broader server compatibility
-        var algorithms = SSHAlgorithms()
-        algorithms.publicKeyAlgorihtms = .add([
-            (Insecure.RSA.PublicKey.self, Insecure.RSA.Signature.self)
-        ])
-        algorithms.keyExchangeAlgorithms = .add([
-            DiffieHellmanGroup14Sha256.self,
-            DiffieHellmanGroup14Sha1.self,
-        ])
+        // Enable RSA host keys + DiffieHellman key exchange for broader server compatibility.
+        let algorithms = SSHAlgorithms.all
 
         do {
             let (ssh, sftp) = try await connectSFTP(
@@ -444,7 +437,7 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                     let sin = sockaddr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
                     var address = sin.sin_addr
                     if inet_ntop(AF_INET, &address, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
-                        let value = String(cString: buffer)
+                        let value = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
                         if !addresses.contains(value) {
                             addresses.append(value)
                         }

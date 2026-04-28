@@ -17,6 +17,7 @@ actor TransferEngine {
     // MARK: Callbacks (Sendable closures → safe across actors)
     var onUpdate: (@Sendable (TransferTask) -> Void)?
     var onComplete: (@Sendable (TransferTask) -> Void)?
+    var onFailure: (@Sendable (TransferTask) -> Void)?
 
     // MARK: - Enqueue
     func enqueue(_ task: TransferTask) {
@@ -200,7 +201,9 @@ actor TransferEngine {
         tasks[idx].status = .failed(message: message)
         runningIDs.remove(id)
         runningTasks.removeValue(forKey: id)
-        notifyUpdate(tasks[idx])
+        let task = tasks[idx]
+        notifyUpdate(task)
+        onFailure?(task)
         drainQueue()
     }
 

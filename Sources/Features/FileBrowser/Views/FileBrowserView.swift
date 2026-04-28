@@ -284,7 +284,11 @@ struct FilePane<Content: View>: View {
                 Image(systemName: icon).foregroundColor(.secondary).font(.system(size: 12))
                 Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Spacer()
-                if isLoading { ProgressView().scaleEffect(0.55) }
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(Color(NSColor.controlBackgroundColor))
