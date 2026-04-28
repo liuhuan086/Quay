@@ -49,7 +49,8 @@ struct FileBrowserView: View {
                 LocalFileList(vm: localVM)
                     .onDrop(of: [.fileURL], isTargeted: nil) { _ in false }
             }
-            .frame(minWidth: 280)
+            .frame(minWidth: 280, idealWidth: 600, maxWidth: .infinity)
+            .layoutPriority(1)
 
             // ── Transfer buttons (center column) ──
             VStack(spacing: 12) {
@@ -104,7 +105,8 @@ struct FileBrowserView: View {
                         handleUploadDrop(providers)
                     }
             }
-            .frame(minWidth: 280)
+            .frame(minWidth: 280, idealWidth: 600, maxWidth: .infinity)
+            .layoutPriority(1)
         }
         .sheet(isPresented: $showNewFolderRemote) {
             NameInputSheet(title: "新建文件夹", placeholder: "文件夹名称", value: $newName) {
