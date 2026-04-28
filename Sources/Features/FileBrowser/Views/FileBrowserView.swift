@@ -1,6 +1,6 @@
 // FileBrowserView.swift — Dual-pane file browser
 import SwiftUI
-import UniformTypeIdentifiers
+import AppKit
 
 // MARK: - FileBrowserView
 struct FileBrowserView: View {
@@ -47,7 +47,6 @@ struct FileBrowserView: View {
                 onOpenExternal: { localVM.openInFinder() }
             ) {
                 LocalFileList(vm: localVM)
-                    .onDrop(of: [.fileURL], isTargeted: nil) { _ in false }
             }
             .frame(minWidth: 280, idealWidth: 600, maxWidth: .infinity)
             .layoutPriority(1)
@@ -97,13 +96,12 @@ struct FileBrowserView: View {
                 onNewFolder: { showNewFolderRemote = true },
                 onOpenExternal: nil
             ) {
-                RemoteFileList(vm: remoteVM,
-                               onDownload: { downloadSelected() },
-                               onDelete: { Task { await remoteVM.deleteSelected() } },
-                               onRename: { item in showRenameRemote = item })
-                    .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                        handleUploadDrop(providers)
-                    }
+                FileDropContainer(onDrop: handleUploadDrop) {
+                    RemoteFileList(vm: remoteVM,
+                                   onDownload: { downloadSelected() },
+                                   onDelete: { Task { await remoteVM.deleteSelected() } },
+                                   onRename: { item in showRenameRemote = item })
+                }
             }
             .frame(minWidth: 280, idealWidth: 600, maxWidth: .infinity)
             .layoutPriority(1)
@@ -160,36 +158,17 @@ struct FileBrowserView: View {
     }
 
     // MARK: - Upload drop handler
-    private func handleUploadDrop(_ providers: [NSItemProvider]) -> Bool {
+    private func handleUploadDrop(_ urls: [URL]) {
         let remoteBasePath = remoteVM.currentPath
-        for p in providers {
-            p.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                guard let url = Self.fileURL(from: item) else { return }
-                Task { @MainActor in
-                    let remotePath = remoteBasePath.hasSuffix("/")
-                        ? remoteBasePath + url.lastPathComponent
-                        : remoteBasePath + "/" + url.lastPathComponent
-                    await appState.enqueue(server: server, direction: .upload,
-                                           localURL: url, remotePath: remotePath)
-                }
+        for url in urls {
+            Task { @MainActor in
+                let remotePath = remoteBasePath.hasSuffix("/")
+                    ? remoteBasePath + url.lastPathComponent
+                    : remoteBasePath + "/" + url.lastPathComponent
+                await appState.enqueue(server: server, direction: .upload,
+                                       localURL: url, remotePath: remotePath)
             }
         }
-        return true
-    }
-
-    nonisolated private static func fileURL(from item: NSSecureCoding?) -> URL? {
-        if let url = item as? URL { return url }
-        if let data = item as? Data,
-           let text = String(data: data, encoding: .utf8) {
-            return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        if let text = item as? String {
-            return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        if let text = item as? NSString {
-            return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        return nil
     }
 
     // MARK: - Upload selected (local → remote)
@@ -398,6 +377,63 @@ struct LocalFileList: View {
             if item.isDirectory { vm.enter(item) }
             else { NSWorkspace.shared.open(item.url) }
         }
+    }
+}
+
+private struct FileDropContainer<Content: View>: NSViewRepresentable {
+    let onDrop: ([URL]) -> Void
+    let content: Content
+
+    init(onDrop: @escaping ([URL]) -> Void, @ViewBuilder content: () -> Content) {
+        self.onDrop = onDrop
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> FileDropHostingView<Content> {
+        FileDropHostingView(rootView: content, onDrop: onDrop)
+    }
+
+    func updateNSView(_ nsView: FileDropHostingView<Content>, context: Context) {
+        nsView.rootView = content
+        nsView.onDrop = onDrop
+    }
+}
+
+private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
+    var onDrop: ([URL]) -> Void
+
+    init(rootView: Root, onDrop: @escaping ([URL]) -> Void) {
+        self.onDrop = onDrop
+        super.init(rootView: rootView)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    @MainActor @preconcurrency required dynamic init(rootView: Root) {
+        self.onDrop = { _ in }
+        super.init(rootView: rootView)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    @MainActor @preconcurrency required dynamic init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        Self.fileURLs(from: sender).isEmpty ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let urls = Self.fileURLs(from: sender)
+        guard !urls.isEmpty else { return false }
+        onDrop(urls)
+        return true
+    }
+
+    private static func fileURLs(from sender: any NSDraggingInfo) -> [URL] {
+        sender.draggingPasteboard.pasteboardItems?.compactMap { item in
+            item.string(forType: .fileURL)
+                .flatMap { URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        } ?? []
     }
 }
 
