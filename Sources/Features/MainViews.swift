@@ -1,5 +1,7 @@
 // MainViews.swift — Root layout + Sidebar
 import SwiftUI
+import AppKit
+import Combine
 import UserNotifications
 
 // MARK: - App Entry
@@ -10,8 +12,9 @@ struct SwiftFTPApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(appState: appState)
                 .environmentObject(appState)
+                .environmentObject(appState.transferBadgeState)
                 .frame(minWidth: 960, minHeight: 640)
         }
         .windowStyle(.titleBar)
@@ -38,7 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
 // MARK: - RootView
 struct RootView: View {
-    @EnvironmentObject var appState: AppState
+    let appState: AppState
     @State private var colVisibility = NavigationSplitViewVisibility.all
 
     var body: some View {
@@ -50,15 +53,22 @@ struct RootView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                TransferBadgeButton()
+                TransferBadgeButton(appState: appState)
             }
         }
         .safeAreaInset(edge: .bottom) { BottomStatusBar() }
-        .alert(item: $appState.alertItem) { item in
+        .background(GlobalAlertHost())
+    }
+
+}
+
+private struct GlobalAlertHost: View {
+    @EnvironmentObject var appState: AppState
+    var body: some View {
+        Color.clear.alert(item: $appState.alertItem) { item in
             Alert(title: Text(item.title), message: Text(item.message))
         }
     }
-
 }
 
 // MARK: - DetailView (shows file browser or welcome)
@@ -69,7 +79,7 @@ struct DetailView: View {
         if let sid = appState.selectedServerID,
            let server = appState.servers.first(where: { $0.id == sid }),
            case .connected(let client) = appState.connectionStates[sid] {
-            FileBrowserView(server: server, primaryClient: client)
+            FileBrowserView(appState: appState, server: server, primaryClient: client)
                 .id(sid)  // force re-init on server change
         } else {
             WelcomeView()
@@ -270,32 +280,97 @@ struct BottomStatusBar: View {
 
 // MARK: - Transfer Badge Button
 struct TransferBadgeButton: View {
-    @EnvironmentObject var appState: AppState
-    @State private var showQueue = false
-
-    var active: Int { appState.transfers.filter {
-        if case .inProgress = $0.status { return true }; return false
-    }.count }
+    let appState: AppState
+    @EnvironmentObject var badgeState: TransferBadgeState
 
     var body: some View {
-        Button { showQueue.toggle() } label: {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: active > 0 ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle")
-                    .foregroundColor(active > 0 ? .blue : .secondary)
-                if active > 0 {
-                    Text("\(active)").font(.system(size: 8, weight: .bold))
-                        .foregroundColor(.white).padding(2)
-                        .background(Color.red).clipShape(Circle())
-                        .offset(x: 5, y: -5)
-                }
+        TransferBadgePopoverAnchor(appState: appState, badgeState: badgeState)
+            .frame(width: 28, height: 22)
+            .help("传输队列")
+    }
+}
+
+private struct TransferBadgePopoverAnchor: NSViewRepresentable {
+    let appState: AppState
+    let badgeState: TransferBadgeState
+
+    func makeCoordinator() -> Coordinator { Coordinator(appState: appState, badgeState: badgeState) }
+
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        let coord = context.coordinator
+        let button = NSButton()
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        button.target = coord
+        button.action = #selector(Coordinator.toggle(_:))
+        button.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            button.topAnchor.constraint(equalTo: container.topAnchor),
+            button.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        coord.button = button
+        coord.refreshIcon()
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.refreshIcon()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSPopoverDelegate {
+        let appState: AppState
+        let badgeState: TransferBadgeState
+        weak var button: NSButton?
+        let popover: NSPopover
+        private var cancellable: AnyCancellable?
+
+        init(appState: AppState, badgeState: TransferBadgeState) {
+            self.appState = appState
+            self.badgeState = badgeState
+            self.popover = NSPopover()
+            super.init()
+            popover.behavior = .transient
+            popover.delegate = self
+            cancellable = badgeState.objectWillChange.sink { [weak self] _ in
+                DispatchQueue.main.async { self?.refreshIcon() }
             }
         }
-        .help("传输队列")
-        .popover(isPresented: $showQueue, arrowEdge: .bottom) {
-            TransferQueueView().frame(width: 420, height: 380)
+
+        @objc func toggle(_ sender: Any?) {
+            if popover.isShown {
+                popover.performClose(nil)
+                return
+            }
+            guard let button else { return }
+            let host = NSHostingController(
+                rootView: TransferQueueView()
+                    .environmentObject(appState)
+                    .frame(width: 420, height: 380)
+            )
+            popover.contentViewController = host
+            popover.contentSize = NSSize(width: 420, height: 380)
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+
+        func refreshIcon() {
+            guard let button else { return }
+            let active = badgeState.activeCount
+            let symbol = active > 0 ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle"
+            let cfg = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+            let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "传输队列")?
+                .withSymbolConfiguration(cfg)
+            button.image = img
+            button.contentTintColor = active > 0 ? .systemBlue : .secondaryLabelColor
+            button.toolTip = active > 0 ? "传输队列（\(active) 进行中）" : "传输队列"
         }
     }
 }
+
 
 // MARK: - App Menu Commands
 struct AppMenuCommands: Commands {

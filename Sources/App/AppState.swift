@@ -3,6 +3,20 @@ import SwiftUI
 import Combine
 
 @MainActor
+final class TransferBadgeState: ObservableObject {
+    @Published private(set) var activeCount = 0
+
+    func update(from transfers: [TransferTask]) {
+        let count = transfers.filter {
+            if case .inProgress = $0.status { return true }
+            return false
+        }.count
+        guard count != activeCount else { return }
+        activeCount = count
+    }
+}
+
+@MainActor
 final class AppState: ObservableObject {
     // MARK: - Published
     @Published var servers: [ServerConfig] = []
@@ -16,6 +30,7 @@ final class AppState: ObservableObject {
     // MARK: - Services
     let repository  = ServerRepository()
     let notifications = NotificationService()
+    let transferBadgeState = TransferBadgeState()
 
     // Transfer engine (actor)
     let engine = TransferEngine()
@@ -87,6 +102,7 @@ final class AppState: ObservableObject {
             serverPassword: server.password
         )
         transfers.append(task)
+        transferBadgeState.update(from: transfers)
         await engine.enqueue(task)
     }
 
@@ -100,6 +116,7 @@ final class AppState: ObservableObject {
                         guard let self else { return }
                         if let i = self.transfers.firstIndex(where: { $0.id == task.id }) {
                             self.transfers[i] = task
+                            self.transferBadgeState.update(from: self.transfers)
                         }
                     }
                 },

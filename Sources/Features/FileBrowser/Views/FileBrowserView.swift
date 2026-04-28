@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 // MARK: - FileBrowserView
 struct FileBrowserView: View {
-    @EnvironmentObject var appState: AppState
+    let appState: AppState
     let server: ServerConfig
     let primaryClient: any AnyFTPClient
 
@@ -26,7 +26,8 @@ struct FileBrowserView: View {
         let fileName: String
     }
 
-    init(server: ServerConfig, primaryClient: any AnyFTPClient) {
+    init(appState: AppState, server: ServerConfig, primaryClient: any AnyFTPClient) {
+        self.appState = appState
         self.server = server
         self.primaryClient = primaryClient
         _remoteVM = StateObject(wrappedValue: RemoteFileVM(client: primaryClient,
@@ -119,12 +120,12 @@ struct FileBrowserView: View {
             RealtimeSyncView(vm: RealtimeSyncViewModel(appState: appState, server: server))
                 .frame(width: 560, height: 500)
         }
-        .onChange(of: appState.lastCompletedTransferServerID) { _, newVal in
-            if newVal == server.id {
+        .background(
+            TransferCompletionWatcher(serverID: server.id) {
                 Task { await remoteVM.refresh() }
                 localVM.refresh()
             }
-        }
+        )
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button {
@@ -244,6 +245,19 @@ struct FileBrowserView: View {
         if !conflicts.isEmpty {
             pendingOverwriteFiles = conflicts
             showOverwriteConfirm = true
+        }
+    }
+}
+
+// MARK: - Transfer Completion Watcher
+private struct TransferCompletionWatcher: View {
+    @EnvironmentObject var appState: AppState
+    let serverID: UUID
+    let onComplete: () -> Void
+
+    var body: some View {
+        Color.clear.onChange(of: appState.lastCompletedTransferServerID) { _, newVal in
+            if newVal == serverID { onComplete() }
         }
     }
 }
