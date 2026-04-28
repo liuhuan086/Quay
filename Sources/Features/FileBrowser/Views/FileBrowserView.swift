@@ -161,13 +161,14 @@ struct FileBrowserView: View {
 
     // MARK: - Upload drop handler
     private func handleUploadDrop(_ providers: [NSItemProvider]) -> Bool {
+        let remoteBasePath = remoteVM.currentPath
         for p in providers {
-            _ = p.loadObject(ofClass: URL.self) { url, _ in
-                guard let url else { return }
+            p.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                guard let url = Self.fileURL(from: item) else { return }
                 Task { @MainActor in
-                    let remotePath = remoteVM.currentPath.hasSuffix("/")
-                        ? remoteVM.currentPath + url.lastPathComponent
-                        : remoteVM.currentPath + "/" + url.lastPathComponent
+                    let remotePath = remoteBasePath.hasSuffix("/")
+                        ? remoteBasePath + url.lastPathComponent
+                        : remoteBasePath + "/" + url.lastPathComponent
                     await appState.enqueue(server: server, direction: .upload,
                                            localURL: url, remotePath: remotePath)
                 }
@@ -176,9 +177,23 @@ struct FileBrowserView: View {
         return true
     }
 
+    nonisolated private static func fileURL(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL { return url }
+        if let data = item as? Data,
+           let text = String(data: data, encoding: .utf8) {
+            return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        if let text = item as? String {
+            return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        if let text = item as? NSString {
+            return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
     // MARK: - Upload selected (local → remote)
     private func uploadSelected() {
-        var urls: [URL] = []
         let selected = localVM.sortedItems.filter { localVM.selectedIDs.contains($0.id) && !$0.isDirectory }
         if selected.isEmpty {
             let panel = NSOpenPanel()
@@ -186,12 +201,16 @@ struct FileBrowserView: View {
             panel.canChooseDirectories = false
             panel.allowsMultipleSelection = true
             panel.message = "选择要上传的文件"
-            guard panel.runModal() == .OK else { return }
-            urls = panel.urls
+            panel.begin { response in
+                guard response == .OK else { return }
+                processUploadURLs(panel.urls)
+            }
         } else {
-            urls = selected.map(\.url)
+            processUploadURLs(selected.map(\.url))
         }
+    }
 
+    private func processUploadURLs(_ urls: [URL]) {
         let existingNames = Set(remoteVM.sortedItems.map(\.name))
         var directFiles: [(URL, String)] = []
         var conflicts: [OverwriteRequest] = []
