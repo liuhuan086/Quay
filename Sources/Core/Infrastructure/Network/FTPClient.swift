@@ -224,6 +224,7 @@ public final class FTPClient: AnyFTPClient {
         let chunkSize = 131_072   // 128 KB
         var lastTime = Date()
         var lastBytes = sent
+        var bps: Int64 = 0
 
         while true {
             let chunk = handle.readData(ofLength: chunkSize)
@@ -233,7 +234,6 @@ public final class FTPClient: AnyFTPClient {
 
             let now = Date()
             let elapsed = now.timeIntervalSince(lastTime)
-            var bps: Int64 = 0
             if elapsed >= 0.3 {
                 bps = Int64(Double(sent - lastBytes) / elapsed)
                 lastBytes = sent; lastTime = now
@@ -282,12 +282,12 @@ public final class FTPClient: AnyFTPClient {
 
         var received: Int64 = offset
         var lastTime = Date(); var lastBytes = received
+        var bps: Int64 = 0
 
         try await stream(on: dataConn) { chunk in
             handle.write(chunk)
             received += Int64(chunk.count)
             let now = Date(); let elapsed = now.timeIntervalSince(lastTime)
-            var bps: Int64 = 0
             if elapsed >= 0.3 { bps = Int64(Double(received - lastBytes) / elapsed); lastBytes = received; lastTime = now }
             onProgress(TransferProgress(bytesTransferred: received, totalBytes: total, bytesPerSecond: bps))
         }

@@ -260,8 +260,21 @@ struct BottomStatusBar: View {
         HStack(spacing: 10) {
             if !activeTransfers.isEmpty {
                 let avg = activeTransfers.map { $0.status.progressFraction }.reduce(0, +) / Double(activeTransfers.count)
+                let totalBps: Int64 = activeTransfers.reduce(0) { sum, t in
+                    if case .inProgress(_, let bps) = t.status { return sum + bps }
+                    return sum
+                }
+                let speed = totalBps > 0
+                    ? ByteCountFormatter.string(fromByteCount: totalBps, countStyle: .file) + "/s"
+                    : "—"
                 ProgressView(value: avg).progressViewStyle(.linear).frame(width: 80).tint(.blue)
-                Text("\(activeTransfers.count) 传输中").font(.caption).foregroundColor(.secondary)
+                Text("\(activeTransfers.count) 传输中")
+                    .font(.caption).foregroundColor(.secondary)
+                    .frame(minWidth: 64, alignment: .leading)
+                Text(speed)
+                    .font(.caption).foregroundColor(.secondary)
+                    .monospacedDigit()
+                    .frame(minWidth: 84, alignment: .leading)
             }
             Spacer()
             if let sid = appState.selectedServerID,
@@ -297,24 +310,13 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(appState: appState, badgeState: badgeState) }
 
     func makeNSView(context: Context) -> NSView {
-        let container = NSView()
         let coord = context.coordinator
-        let button = NSButton()
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
-        button.target = coord
-        button.action = #selector(Coordinator.toggle(_:))
-        button.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            button.topAnchor.constraint(equalTo: container.topAnchor),
-            button.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        coord.button = button
-        coord.refreshIcon()
-        return container
+        let host = ClickableHostingView(rootView: TransferBadgeContent(active: badgeState.activeCount))
+        host.onClick = { [weak coord] in coord?.toggle() }
+        host.toolTip = badgeState.activeCount > 0
+            ? "传输队列（\(badgeState.activeCount) 进行中）" : "传输队列"
+        coord.host = host
+        return host
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
@@ -325,7 +327,7 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
     final class Coordinator: NSObject, NSPopoverDelegate {
         let appState: AppState
         let badgeState: TransferBadgeState
-        weak var button: NSButton?
+        weak var host: ClickableHostingView<TransferBadgeContent>?
         let popover: NSPopover
         private var cancellable: AnyCancellable?
 
@@ -341,33 +343,55 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
             }
         }
 
-        @objc func toggle(_ sender: Any?) {
+        func toggle() {
             if popover.isShown {
                 popover.performClose(nil)
                 return
             }
-            guard let button else { return }
-            let host = NSHostingController(
+            guard let host else { return }
+            let content = NSHostingController(
                 rootView: TransferQueueView()
                     .environmentObject(appState)
                     .frame(width: 420, height: 380)
             )
-            popover.contentViewController = host
+            popover.contentViewController = content
             popover.contentSize = NSSize(width: 420, height: 380)
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.show(relativeTo: host.bounds, of: host, preferredEdge: .minY)
         }
 
         func refreshIcon() {
-            guard let button else { return }
+            guard let host else { return }
             let active = badgeState.activeCount
-            let symbol = active > 0 ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle"
-            let cfg = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-            let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "传输队列")?
-                .withSymbolConfiguration(cfg)
-            button.image = img
-            button.contentTintColor = active > 0 ? .systemBlue : .secondaryLabelColor
-            button.toolTip = active > 0 ? "传输队列（\(active) 进行中）" : "传输队列"
+            host.rootView = TransferBadgeContent(active: active)
+            host.toolTip = active > 0 ? "传输队列（\(active) 进行中）" : "传输队列"
         }
+    }
+}
+
+private final class ClickableHostingView<Root: View>: NSHostingView<Root> {
+    var onClick: () -> Void = {}
+    override func mouseDown(with event: NSEvent) { onClick() }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
+private struct TransferBadgeContent: View {
+    let active: Int
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: active > 0 ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle")
+                .foregroundColor(active > 0 ? .blue : .secondary)
+                .font(.system(size: 16))
+            if active > 0 {
+                Text("\(active)").font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.white).padding(2)
+                    .background(Color.red).clipShape(Circle())
+                    .offset(x: 5, y: -5)
+            }
+        }
+        .frame(width: 28, height: 22)
     }
 }
 

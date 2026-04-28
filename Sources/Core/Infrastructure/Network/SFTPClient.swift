@@ -230,6 +230,7 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                 var lastTime = Date()
                 var lastBytes: Int64 = 0
                 var readOffset = 0
+                var bps: Int64 = 0
 
                 while readOffset < fileData.count {
                     let end = min(readOffset + chunkSize, fileData.count)
@@ -241,7 +242,6 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
 
                     let now = Date()
                     let elapsed = now.timeIntervalSince(lastTime)
-                    var bps: Int64 = 0
                     if elapsed >= 0.3 {
                         bps = Int64(Double(written - lastBytes) / elapsed)
                         lastBytes = written; lastTime = now
@@ -283,6 +283,7 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                 var readOffset: UInt64 = 0
                 var lastTime = Date()
                 var lastBytes: Int64 = 0
+                var bps: Int64 = 0
 
                 while readOffset < UInt64(total) {
                     let remaining = UInt64(total) - readOffset
@@ -298,7 +299,6 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                     let transferred = Int64(readOffset)
                     let now = Date()
                     let elapsed = now.timeIntervalSince(lastTime)
-                    var bps: Int64 = 0
                     if elapsed >= 0.3 {
                         bps = Int64(Double(transferred - lastBytes) / elapsed)
                         lastBytes = transferred
