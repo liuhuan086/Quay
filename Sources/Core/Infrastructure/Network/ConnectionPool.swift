@@ -33,33 +33,50 @@ actor ConnectionPool {
     // MARK: - Borrow a connection
     /// Returns an available client, or waits until one becomes free.
     /// Caller MUST call `returnClient(_:)` after use.
+    ///
+    /// Important: Actor reentrancy means multiple `borrowClient` calls can interleave
+    /// at every `await` point. To avoid two callers grabbing the same connection or
+    /// exceeding `maxSize`, every slot is reserved synchronously (within one actor turn)
+    /// before any `await`.
     func borrowClient(password: String) async throws -> any AnyFTPClient {
-        // 1. Try to find an idle, connected entry
-        if let idx = entries.indices.first(where: { !entries[$0].inUse }) {
-            let entry = entries[idx]
-            let alive = await entry.client.isConnected
-            if alive {
-                entries[idx].inUse   = true
+        while true {
+            // 1. Try to find an idle, connected entry — reserve it synchronously first.
+            if let idx = entries.indices.first(where: { !entries[$0].inUse }) {
+                entries[idx].inUse = true
                 entries[idx].lastUsed = Date()
-                return entry.client
-            } else {
-                // stale — remove and reconnect
-                entries.remove(at: idx)
+                let candidate = entries[idx].client
+
+                let alive = await candidate.isConnected
+                if alive {
+                    return candidate
+                }
+                // Stale — drop it and retry the loop.
+                if let i = entries.firstIndex(where: { $0.client === (candidate as AnyObject) }) {
+                    entries.remove(at: i)
+                }
+                continue
             }
-        }
 
-        // 2. Pool not full — create a new connection
-        if entries.count < maxSize {
-            let client = ClientFactory.makeClient(for: serverConfig)
-            try await client.connect(password: password)
-            let entry = PoolEntry(client: client, inUse: true, lastUsed: Date())
-            entries.append(entry)
-            return client
-        }
+            // 2. Pool not full — reserve a slot synchronously, then connect.
+            if entries.count < maxSize {
+                let client = ClientFactory.makeClient(for: serverConfig)
+                let placeholder = PoolEntry(client: client, inUse: true, lastUsed: Date())
+                entries.append(placeholder)
+                do {
+                    try await client.connect(password: password)
+                    return client
+                } catch {
+                    if let i = entries.firstIndex(where: { $0.client === (client as AnyObject) }) {
+                        entries.remove(at: i)
+                    }
+                    throw error
+                }
+            }
 
-        // 3. Pool full — wait for a return
-        return try await withCheckedThrowingContinuation { cont in
-            waiters.append(cont)
+            // 3. Pool full — wait for a return.
+            return try await withCheckedThrowingContinuation { cont in
+                waiters.append(cont)
+            }
         }
     }
 

@@ -1,30 +1,40 @@
 #!/bin/bash
-# build_dmg.sh — Build SwiftFTP.app (Release) and package as .dmg
+# build_dmg.sh — Build SwiftFTP.app and package as .dmg
 # Usage: ./scripts/build_dmg.sh
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${PROJECT_DIR}/build"
+ARTIFACT_DIR="${PROJECT_DIR}/build"
+BUILD_DIR="/tmp/swiftftp-build"
 APP_NAME="SwiftFTP"
 DMG_NAME="${APP_NAME}_v2.0.0"
 SCHEME="SwiftFTP"
+CONFIGURATION="${CONFIGURATION:-Debug}"
+BUILD_NUMBER="$(date +%Y%m%d%H%M%S)"
 
 echo "==> Cleaning build directory..."
 rm -rf "${BUILD_DIR}"
-mkdir -p "${BUILD_DIR}"
+rm -rf "${ARTIFACT_DIR}"
+mkdir -p "${BUILD_DIR}" "${ARTIFACT_DIR}"
 
-echo "==> Building Release configuration..."
+if pgrep -x "${APP_NAME}" >/dev/null 2>&1; then
+  echo "WARNING: ${APP_NAME} is currently running. Quit it before installing the new DMG."
+fi
+
+echo "==> Building ${CONFIGURATION} configuration..."
 xcodebuild \
   -project "${PROJECT_DIR}/${APP_NAME}.xcodeproj" \
   -scheme "${SCHEME}" \
-  -configuration Release \
+  -configuration "${CONFIGURATION}" \
   -derivedDataPath "${BUILD_DIR}/DerivedData" \
+  -clonedSourcePackagesDirPath "${BUILD_DIR}/SourcePackages" \
+  CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
   CODE_SIGN_IDENTITY="-" \
+  CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
-  ONLY_ACTIVE_ARCH=NO \
   build 2>&1 | tail -5
 
-APP_PATH="${BUILD_DIR}/DerivedData/Build/Products/Release/${APP_NAME}.app"
+APP_PATH="${BUILD_DIR}/DerivedData/Build/Products/${CONFIGURATION}/${APP_NAME}.app"
 
 if [ ! -d "${APP_PATH}" ]; then
   echo "ERROR: ${APP_PATH} not found. Build may have failed."
@@ -32,10 +42,16 @@ if [ ! -d "${APP_PATH}" ]; then
 fi
 
 echo "==> App built at: ${APP_PATH}"
+echo "==> Bundle version: $(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "${APP_PATH}/Contents/Info.plist")"
+
+echo "==> Ad-hoc signing app..."
+/usr/bin/codesign --force --deep --sign - \
+  --entitlements "${PROJECT_DIR}/Sources/Resources/${APP_NAME}.entitlements" \
+  "${APP_PATH}"
 
 # --- Create DMG ---
 DMG_DIR="${BUILD_DIR}/dmg_staging"
-DMG_OUTPUT="${BUILD_DIR}/${DMG_NAME}.dmg"
+DMG_OUTPUT="${ARTIFACT_DIR}/${DMG_NAME}.dmg"
 
 echo "==> Preparing DMG staging area..."
 rm -rf "${DMG_DIR}"
@@ -54,6 +70,8 @@ hdiutil create \
   -ov \
   -format UDZO \
   "${DMG_OUTPUT}"
+
+hdiutil verify "${DMG_OUTPUT}"
 
 echo ""
 echo "================================================"

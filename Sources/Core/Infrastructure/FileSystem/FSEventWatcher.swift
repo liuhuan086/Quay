@@ -127,11 +127,15 @@ public struct ExclusionMatcher: Sendable {
         for p in patterns {
             if p.contains("*") {
                 if matchGlob(fileName, pattern: p) { return true }
-            } else if path.contains("/\(p)") || fileName == p {
+            } else if pathComponents(path).contains(p) {
                 return true
             }
         }
         return false
+    }
+
+    private func pathComponents(_ path: String) -> [String] {
+        path.split(separator: "/").map(String.init)
     }
 
     private func matchGlob(_ string: String, pattern: String) -> Bool {

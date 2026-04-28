@@ -116,7 +116,8 @@ final class AppState: ObservableObject {
 
     // MARK: - Alerts
     func showError(_ error: Error) {
-        alertItem = AlertItem(title: "错误", message: error.localizedDescription)
+        let friendly = FTPError.friendly(error)
+        alertItem = AlertItem(title: "错误", message: friendly.errorDescription ?? error.localizedDescription)
     }
 }
 

@@ -290,6 +290,11 @@ final class FTPErrorTests: XCTestCase {
         let e = FTPError.hostKeyMismatch("badserver.com")
         XCTAssertTrue(e.errorDescription?.contains("badserver.com") ?? false)
     }
+
+    func test_hostReachabilityFailure_detects_posixHostUnreachable() {
+        let error = POSIXError(POSIXErrorCode(rawValue: EHOSTUNREACH)!)
+        XCTAssertTrue(FTPError.isHostReachabilityFailure(error))
+    }
 }
 
 // MARK: - ContinuationBox Concurrency Tests
