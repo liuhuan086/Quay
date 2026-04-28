@@ -1,7 +1,7 @@
 // RealtimeSyncView.swift — Real-time sync with FSEvents
 import SwiftUI
 import Combine
-import UniformTypeIdentifiers
+import AppKit
 
 // MARK: - SyncManager (actor, owns the watcher)
 actor SyncManager {
@@ -235,15 +235,13 @@ struct RealtimeSyncView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("本地监控文件夹").font(.caption).foregroundColor(.secondary)
                 HStack {
-                    TextField("拖入文件夹或点击选择", text: $localPath)
-                        .textFieldStyle(.roundedBorder)
-                        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                            providers.first?.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                                guard let url = fileURL(from: item) else { return }
-                                DispatchQueue.main.async { localPath = url.path }
-                            }
-                            return true
-                        }
+                    FileDropContainer { urls in
+                        guard let url = urls.first else { return }
+                        localPath = url.path
+                    } content: {
+                        TextField("拖入文件夹或点击选择", text: $localPath)
+                            .textFieldStyle(.roundedBorder)
+                    }
                     Button("选择…") {
                         let p = NSOpenPanel()
                         p.canChooseFiles = false; p.canChooseDirectories = true
@@ -298,19 +296,61 @@ struct RealtimeSyncView: View {
     }
 }
 
-private func fileURL(from item: NSSecureCoding?) -> URL? {
-    if let url = item as? URL { return url }
-    if let data = item as? Data,
-       let text = String(data: data, encoding: .utf8) {
-        return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+private struct FileDropContainer<Content: View>: NSViewRepresentable {
+    let onDrop: ([URL]) -> Void
+    let content: Content
+
+    init(onDrop: @escaping ([URL]) -> Void, @ViewBuilder content: () -> Content) {
+        self.onDrop = onDrop
+        self.content = content()
     }
-    if let text = item as? String {
-        return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+
+    func makeNSView(context: Context) -> FileDropHostingView<Content> {
+        FileDropHostingView(rootView: content, onDrop: onDrop)
     }
-    if let text = item as? NSString {
-        return URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
+
+    func updateNSView(_ nsView: FileDropHostingView<Content>, context: Context) {
+        nsView.rootView = content
+        nsView.onDrop = onDrop
     }
-    return nil
+}
+
+private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
+    var onDrop: ([URL]) -> Void
+
+    init(rootView: Root, onDrop: @escaping ([URL]) -> Void) {
+        self.onDrop = onDrop
+        super.init(rootView: rootView)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    @MainActor @preconcurrency required dynamic init(rootView: Root) {
+        self.onDrop = { _ in }
+        super.init(rootView: rootView)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    @MainActor @preconcurrency required dynamic init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        Self.fileURLs(from: sender).isEmpty ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let urls = Self.fileURLs(from: sender)
+        guard !urls.isEmpty else { return false }
+        onDrop(urls)
+        return true
+    }
+
+    private static func fileURLs(from sender: any NSDraggingInfo) -> [URL] {
+        sender.draggingPasteboard.pasteboardItems?.compactMap { item in
+            item.string(forType: .fileURL)
+                .flatMap { URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        } ?? []
+    }
 }
 
 // MARK: - Watcher Row
