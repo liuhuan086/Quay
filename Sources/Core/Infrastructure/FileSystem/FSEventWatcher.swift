@@ -76,7 +76,7 @@ public final class FSEventWatcher: @unchecked Sendable {
         )
 
         if let stream = streamRef {
-            FSEventStreamScheduleWithRunLoop(stream, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            FSEventStreamSetDispatchQueue(stream, debounceQueue)
             FSEventStreamStart(stream)
         }
     }

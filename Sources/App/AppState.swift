@@ -95,7 +95,7 @@ final class AppState: ObservableObject {
     ) async {
         let attrs = try? FileManager.default.attributesOfItem(atPath: localURL.path)
         let size  = (attrs?[.size] as? Int64) ?? 0
-        var task  = TransferTask(
+        let task  = TransferTask(
             serverID: server.id, serverName: server.displayName,
             direction: direction, localURL: localURL, remotePath: remotePath,
             fileSize: size, isAutoSync: isAutoSync,
@@ -126,6 +126,15 @@ final class AppState: ObservableObject {
                             fileName: task.fileName, direction: task.direction)
                         self?.lastCompletedTransferServerID = task.serverID
                     }
+                },
+                onFailure: { [weak self] task in
+                    Task { @MainActor [weak self] in
+                        guard case .failed(let message) = task.status else { return }
+                        self?.alertItem = AlertItem(
+                            title: "传输失败",
+                            message: "\(task.fileName)：\(message)"
+                        )
+                    }
                 }
             )
         }
@@ -149,9 +158,11 @@ struct AlertItem: Identifiable {
 extension TransferEngine {
     func setCallbacks(
         onUpdate: @Sendable @escaping (TransferTask) -> Void,
-        onComplete: @Sendable @escaping (TransferTask) -> Void
+        onComplete: @Sendable @escaping (TransferTask) -> Void,
+        onFailure: @Sendable @escaping (TransferTask) -> Void
     ) async {
         self.onUpdate   = onUpdate
         self.onComplete = onComplete
+        self.onFailure  = onFailure
     }
 }

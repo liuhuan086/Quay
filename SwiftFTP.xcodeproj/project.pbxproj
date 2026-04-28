@@ -549,6 +549,11 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					AppIntents,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.swiftftp.app;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -587,6 +592,11 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					AppIntents,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.swiftftp.app;
 				SDKROOT = macosx;

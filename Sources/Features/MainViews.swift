@@ -212,7 +212,10 @@ struct ServerRow: View {
 
     @ViewBuilder var stateIndicator: some View {
         switch state {
-        case .connecting: ProgressView().scaleEffect(0.5).frame(width: 14)
+        case .connecting:
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 16, height: 16)
         case .connected:  Circle().fill(Color.green).frame(width: 7, height: 7)
         case .failed:     Image(systemName: "exclamationmark.circle.fill").foregroundColor(.red).font(.caption)
         default:          EmptyView()
