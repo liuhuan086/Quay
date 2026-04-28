@@ -242,13 +242,13 @@ struct FileBrowserView: View {
     // MARK: - Download selected
     private func downloadSelected() {
         let selected = remoteVM.sortedItems.filter { remoteVM.selectedIDs.contains($0.id) }
-        let downloadDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        let destinationDir = URL(fileURLWithPath: localVM.currentPath, isDirectory: true)
 
         var directFiles: [(URL, String)] = []
         var conflicts: [OverwriteRequest] = []
 
         for item in selected where !item.isDirectory {
-            let localURL = downloadDir.appendingPathComponent(item.name)
+            let localURL = destinationDir.appendingPathComponent(item.name)
             if FileManager.default.fileExists(atPath: localURL.path) {
                 conflicts.append(OverwriteRequest(localURL: localURL, remotePath: item.path,
                                                    direction: .download, fileName: item.name))
