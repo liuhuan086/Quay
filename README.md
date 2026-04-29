@@ -2,6 +2,11 @@
 
 本项目是 macOS App，Xcode scheme 为 `SwiftFTP`。建议把 DerivedData 和 DMG staging 放到 `/tmp`，避免 `Documents` 目录给 `.app`/`.bundle` 自动附加 FinderInfo/FileProvider 扩展属性，导致 `codesign` 报 `resource fork, Finder information, or similar detritus not allowed`。
 
+## 产品化与上架文档
+
+- `Docs/AppStore_Readiness.md`：Mac App Store 上架可行性、付费定价、阻塞问题与整改顺序。
+- `Docs/prompts.md`：后续 AI/工程协作的专业提示词、验收标准和审核检查清单。
+
 ## 本次产物
 
 - App: `/tmp/swiftftp-build/DerivedData/Build/Products/Release/SwiftFTP.app`

@@ -218,47 +218,33 @@ TransferEngine.resume(id:password:)
 
 ---
 
-## 四、SFTP 实现说明（NMSSH）
+## 四、SFTP 实现说明（Citadel）
 
 ### 集成步骤
 
 ```
-1. Xcode → File → Add Package Dependencies
-   URL: https://github.com/NMSSH/NMSSH
-   Version: Up to Next Major from 2.3.2
+1. SFTP 依赖已在 project.yml 中声明：
+   Citadel:
+     url: https://github.com/orlandos-nl/Citadel.git
+     from: "0.7.0"
 
-2. 创建 Bridging Header（Xcode 会自动提示）：
-   // SwiftFTP-Bridging-Header.h
-   #import <NMSSH/NMSSH.h>
+2. 重新生成/打开 Xcode project 后，SwiftPM 会解析 Citadel 及其 SwiftNIO 相关依赖。
 
-3. Build Settings → Swift Compiler → Objective-C Bridging Header:
-   SwiftFTP/SwiftFTP-Bridging-Header.h
+3. SFTPClient.swift 直接 import Citadel / NIOSSH / NIO，不需要 Objective-C Bridging Header。
 ```
-
-### 取消 SFTPClient.swift 中的注释
-
-文件中所有 `/* ── NMSSH ──` ... `── */` 之间的代码在添加 NMSSH 后取消注释即可。
 
 ### 关键实现细节
 
-**libssh2 线程安全：**
+**Citadel/NIO 状态隔离：**
 ```swift
-// libssh2 不是线程安全的！所有调用必须在同一队列
+// SFTPClient 使用 serial queue 管理 SSH/SFTP handle 状态，
+// 避免协议 conformance 跨 actor isolation 的 Swift 6 问题。
 private let queue = DispatchQueue(label: "com.swiftftp.sftp.\(UUID())", qos: .userInitiated)
-
-private func run<T: Sendable>(_ block: @escaping () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { cont in
-        queue.async {
-            do { cont.resume(returning: try block()) }
-            catch { cont.resume(throwing: error) }
-        }
-    }
-}
 ```
 
 **主机密钥 TOFU（首次信任）：**
 ```swift
-let fingerprint = session.fingerprint(NMSSHSessionHashSHA256) ?? ""
+let fingerprint = /* Citadel/NIOSSH host key SHA-256 fingerprint */
 if let stored = KnownHostsManager.shared.fingerprint(for: host) {
     guard stored == fingerprint else { throw FTPError.hostKeyMismatch(host) }
 } else {
@@ -269,12 +255,14 @@ if let stored = KnownHostsManager.shared.fingerprint(for: host) {
 
 **SFTP 大文件上传（分块）：**
 ```swift
-// libssh2 单次写入上限约 32KB，需要分块
+// Citadel SFTP 写入应流式读取本地文件，避免 Data(contentsOf:) 读完整文件导致 OOM。
 let chunkSize = 32_768
 while true {
     let chunk = handle.readData(ofLength: chunkSize)
     guard !chunk.isEmpty else { break }
-    sftp.writeData(chunk, toFileAtPath: remotePath)
+    var buffer = ByteBuffer(data: chunk)
+    try await file.write(buffer, at: offset)
+    offset += UInt64(chunk.count)
 }
 ```
 
@@ -324,7 +312,7 @@ Sources/
 │   └── Infrastructure/
 │       ├── Network/
 │       │   ├── FTPClient.swift     # FTP/FTPS 实现（class + DispatchQueue）
-│       │   ├── SFTPClient.swift    # SFTP 实现（NMSSH wrapper）
+│       │   ├── SFTPClient.swift    # SFTP 实现（Citadel）
 │       │   ├── ConnectionPool.swift# 连接池 actor（per-server, max 5 connections）
 │       │   ├── TransferEngine.swift# 传输引擎 actor（队列/并发/重试/恢复）
 │       │   └── ClientFactory.swift # 工厂方法（根据协议创建 client）
@@ -345,4 +333,4 @@ Sources/
 
 ---
 
-*SwiftFTP v2 — Swift 6 + SwiftUI + Network.framework + NMSSH*
+*SwiftFTP v2 — Swift 6 + SwiftUI + Network.framework + Citadel*

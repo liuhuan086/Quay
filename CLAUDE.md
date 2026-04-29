@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SwiftFTP v2 is a macOS FTP/FTPS/SFTP client built with SwiftUI + Swift 6 strict concurrency. It targets macOS and uses `Network.framework` for FTP/FTPS and NMSSH (optional, via SPM) for SFTP.
+SwiftFTP v2 is a macOS FTP/FTPS/SFTP client built with SwiftUI + Swift 6 strict concurrency. It targets macOS and uses `Network.framework` for FTP/FTPS and Citadel via SwiftPM for SFTP.
+
+## Productization Guidance
+
+Before making release-oriented changes, read:
+
+- `Docs/AppStore_Readiness.md` for App Store blockers, pricing direction, and release gates.
+- `Docs/prompts.md` for professional AI/developer prompts and acceptance criteria.
+
+Current release direction: SwiftFTP may become a small paid Mac App Store utility, but App Sandbox compatibility and Keychain-backed credential storage are mandatory before submission.
 
 ## Build & Test
 
@@ -17,7 +26,7 @@ This is an Xcode project — there is no `Package.swift`. Build and test via Xco
 - **Enable Swift 6 strict concurrency:** Build Settings → Swift Compiler → Swift Language Version = Swift 6 (or Swift Strict Concurrency = Complete)
 - **Runtime race detection:** Instruments → Thread Sanitizer
 
-SFTP support via NMSSH requires adding the package dependency manually in Xcode and uncommenting the `/* ── NMSSH ──` blocks in `SFTPClient.swift`.
+SFTP support is implemented with the Citadel SwiftPM dependency declared in `project.yml`.
 
 ## Architecture
 
@@ -34,7 +43,7 @@ Sources/
 │   └── Infrastructure/
 │       ├── Network/
 │       │   ├── FTPClient.swift         — FTP/FTPS (class + DispatchQueue, not actor)
-│       │   ├── SFTPClient.swift        — SFTP (NMSSH wrapper, commented out until added)
+│       │   ├── SFTPClient.swift        — SFTP via Citadel
 │       │   ├── ClientFactory.swift     — Creates correct client for a ServerConfig
 │       │   ├── ConnectionPool.swift    — actor: per-server pool (max 5), borrow/return pattern
 │       │   └── TransferEngine.swift    — actor: transfer queue, concurrency, pause/resume/retry
