@@ -22,9 +22,13 @@ final class ServerConfigTests: XCTestCase {
         XCTAssertEqual(c.connectionSummary, "SFTP://admin@ftp.example.com:22")
     }
 
-    func test_password_stored_in_config() {
+    func test_password_runtimeOnly_notEncoded() throws {
         let a = ServerConfig(displayName: "A", host: "a.com", username: "u", password: "secret123")
         XCTAssertEqual(a.password, "secret123")
+        let data = try JSONEncoder().encode(a)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertFalse(json.contains("secret123"))
+        XCTAssertFalse(json.contains("\"password\""))
     }
 
     func test_protocol_isSecure() {
@@ -164,17 +168,34 @@ final class KeychainTests: XCTestCase {
 // MARK: - ServerRepository Tests
 final class ServerRepositoryTests: XCTestCase {
     var repo: ServerRepository!
+    var repoKey: String!
 
     override func setUp() {
         super.setUp()
-        repo = ServerRepository()
+        repoKey = "swiftftp.tests.servers.\(UUID().uuidString)"
+        repo = ServerRepository(key: repoKey)
+    }
+
+    override func tearDown() {
+        for server in repo.fetchAll() {
+            repo.delete(server.id)
+        }
+        UserDefaults.standard.removeObject(forKey: repoKey)
+        repo = nil
+        repoKey = nil
+        super.tearDown()
     }
 
     func test_saveAndFetch() {
-        let c = makeCfg("Repo Test")
+        let c = makeCfg("Repo Test", password: "secret")
         repo.save(c)
-        XCTAssertTrue(repo.fetchAll().contains(where: { $0.id == c.id }))
-        repo.delete(c.id)
+        let fetched = repo.fetchAll().first(where: { $0.id == c.id })
+        XCTAssertEqual(fetched?.password, "secret")
+        let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
+            String(data: $0, encoding: .utf8)
+        } ?? ""
+        XCTAssertFalse(persisted.contains("secret"))
+        XCTAssertFalse(persisted.contains("\"password\""))
     }
 
     func test_update() {
@@ -183,7 +204,6 @@ final class ServerRepositoryTests: XCTestCase {
         c.displayName = "Updated"
         repo.update(c)
         XCTAssertEqual(repo.fetchAll().first(where: { $0.id == c.id })?.displayName, "Updated")
-        repo.delete(c.id)
     }
 
     func test_delete() {
@@ -201,7 +221,33 @@ final class ServerRepositoryTests: XCTestCase {
         repo.delete(c.id)
         try repo.importJSON(data)
         XCTAssertTrue(repo.fetchAll().contains(where: { $0.id == c.id }))
-        repo.delete(c.id)
+    }
+
+    func test_legacyPasswordMigratesToKeychainAndIsRemovedFromDefaults() throws {
+        let id = UUID()
+        let legacyJSON = """
+        [{
+          "id": "\(id.uuidString)",
+          "displayName": "Legacy",
+          "host": "legacy.local",
+          "username": "u",
+          "password": "legacy-secret"
+        }]
+        """
+        UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: repoKey)
+        defer {
+            KeychainManager.shared.deletePassword(for: id.uuidString)
+        }
+
+        let fetched = repo.fetchAll()
+        XCTAssertEqual(fetched.first?.password, "legacy-secret")
+        XCTAssertEqual(try KeychainManager.shared.getPassword(for: id.uuidString), "legacy-secret")
+
+        let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
+            String(data: $0, encoding: .utf8)
+        } ?? ""
+        XCTAssertFalse(persisted.contains("legacy-secret"))
+        XCTAssertFalse(persisted.contains("\"password\""))
     }
 
     func test_sortedByDisplayName() {
@@ -213,11 +259,10 @@ final class ServerRepositoryTests: XCTestCase {
         if let ai = names.firstIndex(of: "A-Server"), let bi = names.firstIndex(of: "B-Server") {
             XCTAssertLessThan(ai, bi, "Should be sorted alphabetically")
         }
-        repo.delete(a.id); repo.delete(b.id)
     }
 
-    private func makeCfg(_ name: String) -> ServerConfig {
-        ServerConfig(displayName: name, host: "test.local", username: "u")
+    private func makeCfg(_ name: String, password: String = "") -> ServerConfig {
+        ServerConfig(displayName: name, host: "test.local", username: "u", password: password)
     }
 }
 
@@ -341,7 +386,8 @@ final class PerformanceTests: XCTestCase {
     }
 
     func test_repository_fetchAll_performance() {
-        let repo = ServerRepository()
+        let key = "swiftftp.tests.performance.\(UUID().uuidString)"
+        let repo = ServerRepository(key: key)
         // Pre-populate
         let configs = (0..<20).map {
             ServerConfig(displayName: "Server \($0)", host: "host\($0).com", username: "u")
@@ -349,5 +395,6 @@ final class PerformanceTests: XCTestCase {
         configs.forEach { repo.save($0) }
         measure { _ = repo.fetchAll() }
         configs.forEach { repo.delete($0.id) }
+        UserDefaults.standard.removeObject(forKey: key)
     }
 }

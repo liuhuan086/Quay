@@ -48,6 +48,8 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
     public var notes: String
     public var useSSHKey: Bool
     public var sshKeyPath: String?
+    // Runtime-only credential loaded from Keychain. Decoding accepts legacy JSON
+    // passwords for migration, but encoding never persists this field.
     public var password: String
     public var createdAt: Date
     public var lastConnectedAt: Date?
@@ -86,6 +88,65 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
 
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
     public static func == (l: ServerConfig, r: ServerConfig) -> Bool { l.id == r.id }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case displayName
+        case host
+        case port
+        case username
+        case protocol_
+        case initialPath
+        case encodingName
+        case groupName
+        case colorLabel
+        case notes
+        case useSSHKey
+        case sshKeyPath
+        case password
+        case createdAt
+        case lastConnectedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.displayName = try c.decode(String.self, forKey: .displayName)
+        self.host = try c.decode(String.self, forKey: .host)
+        self.port = try c.decodeIfPresent(Int.self, forKey: .port)
+            ?? (try c.decodeIfPresent(ConnectionProtocol.self, forKey: .protocol_) ?? .sftp).defaultPort
+        self.username = try c.decode(String.self, forKey: .username)
+        self.protocol_ = try c.decodeIfPresent(ConnectionProtocol.self, forKey: .protocol_) ?? .sftp
+        self.initialPath = try c.decodeIfPresent(String.self, forKey: .initialPath) ?? "/"
+        self.encodingName = try c.decodeIfPresent(String.self, forKey: .encodingName) ?? "utf-8"
+        self.groupName = try c.decodeIfPresent(String.self, forKey: .groupName)
+        self.colorLabel = try c.decodeIfPresent(ServerColorLabel.self, forKey: .colorLabel)
+        self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        self.useSSHKey = try c.decodeIfPresent(Bool.self, forKey: .useSSHKey) ?? false
+        self.sshKeyPath = try c.decodeIfPresent(String.self, forKey: .sshKeyPath)
+        self.password = try c.decodeIfPresent(String.self, forKey: .password) ?? ""
+        self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        self.lastConnectedAt = try c.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(displayName, forKey: .displayName)
+        try c.encode(host, forKey: .host)
+        try c.encode(port, forKey: .port)
+        try c.encode(username, forKey: .username)
+        try c.encode(protocol_, forKey: .protocol_)
+        try c.encode(initialPath, forKey: .initialPath)
+        try c.encode(encodingName, forKey: .encodingName)
+        try c.encodeIfPresent(groupName, forKey: .groupName)
+        try c.encodeIfPresent(colorLabel, forKey: .colorLabel)
+        try c.encode(notes, forKey: .notes)
+        try c.encode(useSSHKey, forKey: .useSSHKey)
+        try c.encodeIfPresent(sshKeyPath, forKey: .sshKeyPath)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(lastConnectedAt, forKey: .lastConnectedAt)
+    }
 }
 
 // MARK: - RemoteFileItem
@@ -191,11 +252,8 @@ public struct TransferTask: Identifiable, Sendable {
         return secs < 60 ? "\(secs)s" : "\(secs / 60)m \(secs % 60)s"
     }
 
-    public var serverPassword: String
-
     public init(serverID: UUID, serverName: String, direction: TransferDirection,
-                localURL: URL, remotePath: String, fileSize: Int64 = 0, isAutoSync: Bool = false,
-                serverPassword: String = "") {
+                localURL: URL, remotePath: String, fileSize: Int64 = 0, isAutoSync: Bool = false) {
         self.id              = UUID()
         self.serverID        = serverID
         self.serverName      = serverName
@@ -207,7 +265,6 @@ public struct TransferTask: Identifiable, Sendable {
         self.bytesTransferred = 0
         self.resumeOffset    = 0
         self.isAutoSync      = isAutoSync
-        self.serverPassword  = serverPassword
         self.retryCount      = 0
     }
 }

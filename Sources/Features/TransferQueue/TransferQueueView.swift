@@ -107,8 +107,7 @@ struct TransferRow: View {
         if case .paused = task.status {
             Button {
                 Task {
-                    let pwd = appState.servers.first(where: { $0.id == task.serverID })?.password ?? ""
-                    await appState.engine.resume(id: task.id, password: pwd)
+                    await appState.engine.resume(id: task.id)
                 }
             } label: { Image(systemName: "play.circle").foregroundColor(.green) }.buttonStyle(.plain)
         }
@@ -212,7 +211,7 @@ struct SettingsRootView: View {
             .padding().tabItem { Label("通用", systemImage: "gear") }
 
             Form {
-                Text("密码保存在本地客户端中，不使用 macOS 钥匙串。")
+                Text("密码安全保存在 macOS 钥匙串中。")
                     .foregroundColor(.secondary)
                 Button("清除所有保存的密码") {
                     for i in appState.servers.indices {

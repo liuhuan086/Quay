@@ -98,8 +98,7 @@ final class AppState: ObservableObject {
         let task  = TransferTask(
             serverID: server.id, serverName: server.displayName,
             direction: direction, localURL: localURL, remotePath: remotePath,
-            fileSize: size, isAutoSync: isAutoSync,
-            serverPassword: server.password
+            fileSize: size, isAutoSync: isAutoSync
         )
         transfers.append(task)
         transferBadgeState.update(from: transfers)
