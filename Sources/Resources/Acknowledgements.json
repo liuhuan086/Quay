@@ -1,0 +1,62 @@
+[
+  {
+    "name": "Citadel",
+    "license": "BSD-2-Clause",
+    "copyright": "Copyright (c) Joannis Orlandos",
+    "url": "https://github.com/orlandos-nl/Citadel"
+  },
+  {
+    "name": "SwiftNIO",
+    "license": "Apache License 2.0",
+    "copyright": "Copyright (c) Apple Inc. and the SwiftNIO project authors",
+    "url": "https://github.com/apple/swift-nio"
+  },
+  {
+    "name": "Swift Crypto",
+    "license": "Apache License 2.0",
+    "copyright": "Copyright (c) Apple Inc. and the Swift Crypto project authors",
+    "url": "https://github.com/apple/swift-crypto"
+  },
+  {
+    "name": "NIOSSH",
+    "license": "Apache License 2.0",
+    "copyright": "Copyright (c) Apple Inc. and the NIOSSH project authors",
+    "url": "https://github.com/apple/swift-nio-ssh"
+  },
+  {
+    "name": "Swift ASN.1",
+    "license": "Apache License 2.0",
+    "copyright": "Copyright (c) Apple Inc. and the Swift ASN.1 project authors",
+    "url": "https://github.com/apple/swift-asn1"
+  },
+  {
+    "name": "Swift Atomics",
+    "license": "Apache License 2.0",
+    "copyright": "Copyright (c) Apple Inc. and the Swift Atomics project authors",
+    "url": "https://github.com/apple/swift-atomics"
+  },
+  {
+    "name": "Swift Collections",
+    "license": "Apache License 2.0",
+    "copyright": "Copyright (c) Apple Inc. and the Swift Collections project authors",
+    "url": "https://github.com/apple/swift-collections"
+  },
+  {
+    "name": "Swift Log",
+    "license": "Apache License 2.0",
+    "copyright": "Copyright (c) Apple Inc. and the Swift Log project authors",
+    "url": "https://github.com/apple/swift-log"
+  },
+  {
+    "name": "Swift System",
+    "license": "Apache License 2.0",
+    "copyright": "Copyright (c) Apple Inc. and the Swift System project authors",
+    "url": "https://github.com/apple/swift-system"
+  },
+  {
+    "name": "BigInt",
+    "license": "MIT License",
+    "copyright": "Copyright (c) Attila Toth",
+    "url": "https://github.com/attaswift/BigInt"
+  }
+]
