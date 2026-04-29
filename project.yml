@@ -29,6 +29,7 @@ targets:
           - "**/.DS_Store"
     resources:
       - path: Sources/Resources/Assets.xcassets
+      - path: Sources/Resources/Acknowledgements.json
     dependencies:
       - package: Citadel
     settings:

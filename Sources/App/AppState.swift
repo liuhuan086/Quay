@@ -32,6 +32,7 @@ final class AppState: ObservableObject {
     @Published var alertItem: AlertItem?
     @Published var lastCompletedTransferServerID: UUID?
     @Published var isAddServerPresented = false
+    @Published var isAboutPresented = false
     @Published var hasSeenOnboarding: Bool {
         didSet { UserDefaults.standard.set(hasSeenOnboarding, forKey: hasSeenOnboardingKey) }
     }
@@ -63,6 +64,10 @@ final class AppState: ObservableObject {
 
     func presentAddServer() {
         isAddServerPresented = true
+    }
+
+    func presentAbout() {
+        isAboutPresented = true
     }
 
     func completeOnboarding() {

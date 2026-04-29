@@ -10,12 +10,14 @@
 		167C312C829CB1BA7DAA49D4 /* ServerRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 964E034C434731E277145B32 /* ServerRepository.swift */; };
 		16E3C79C12BEC0717BC5B65B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F4DE2072153E3DC1397F9F14 /* Assets.xcassets */; };
 		174C5E03E7335F13AB744E99 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9D78A54E0896A666C9D0C9 /* TransferQueueView.swift */; };
+		2A7C004B3E9F4B8696D7E3E2 /* Acknowledgements.json in Resources */ = {isa = PBXBuildFile; fileRef = 54E1D81E4A9E4E77AF4A1D77 /* Acknowledgements.json */; };
 		45AC706C3A65520379ECC4F2 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63D4DA4123D4A2662BA85C69 /* Entities.swift */; };
 		4EDF22ACA8476CC0A4CFADFE /* ClientFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29E43F90769F7BAC703B56B /* ClientFactory.swift */; };
 		605AA6AE2B02B6EC9EB52D1A /* AnyFTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F15BB0E1958D46266904C36 /* AnyFTPClient.swift */; };
 		65C4D7543FBA858446216EAA /* SwiftFTPv2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EDF0092FD9616B870C7463 /* SwiftFTPv2Tests.swift */; };
 		75FDAF5CEC56804627572EF6 /* ServerEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5410A57AB011264AE4406E /* ServerEditView.swift */; };
 		7AF829FC955B2C1D0718DA23 /* RealtimeSyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 710E5C903F3EFB834BCBEEE8 /* RealtimeSyncView.swift */; };
+		82D09AE43B7B47F1AB776194 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3194D056403466F90F51F23 /* AboutView.swift */; };
 		8B7D4C24A0F146859E9B1DA3 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4F83C690D94AC0BC8D2E15 /* OnboardingView.swift */; };
 		960A1E764193116F83279635 /* FileBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E1F668E57E72FB0227A85C /* FileBrowserView.swift */; };
 		AB785DD3E7698AE12FE6943C /* SFTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F229EE36AF0B986EFB9636E /* SFTPClient.swift */; };
@@ -46,6 +48,7 @@
 		2F15BB0E1958D46266904C36 /* AnyFTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnyFTPClient.swift; sourceTree = "<group>"; };
 		471E9A5EC9EC8DE7F9C9F679 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
 		4FEF6F3A041ABE75C83C4BA1 /* MainViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViews.swift; sourceTree = "<group>"; };
+		54E1D81E4A9E4E77AF4A1D77 /* Acknowledgements.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Acknowledgements.json; sourceTree = "<group>"; };
 		57E1F668E57E72FB0227A85C /* FileBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserView.swift; sourceTree = "<group>"; };
 		5FE2FCE36D5956FEC0F209D3 /* FTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FTPClient.swift; sourceTree = "<group>"; };
 		63D4DA4123D4A2662BA85C69 /* Entities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entities.swift; sourceTree = "<group>"; };
@@ -55,6 +58,7 @@
 		964E034C434731E277145B32 /* ServerRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRepository.swift; sourceTree = "<group>"; };
 		9A4F83C690D94AC0BC8D2E15 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		99518BAE51DDFE436D991FCB /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		A3194D056403466F90F51F23 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		C85ED3AFD83CE107BA714A41 /* TransferEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferEngine.swift; sourceTree = "<group>"; };
 		CE5410A57AB011264AE4406E /* ServerEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerEditView.swift; sourceTree = "<group>"; };
 		D29E43F90769F7BAC703B56B /* ClientFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientFactory.swift; sourceTree = "<group>"; };
@@ -83,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				4FEF6F3A041ABE75C83C4BA1 /* MainViews.swift */,
+				C34A19F83D9F4F4A91AD658F /* About */,
 				50DC0FC6111F60778EE0BB98 /* ConnectionManager */,
 				7382664B6D5530A6671D1250 /* FileBrowser */,
 				64EBC5A0DA8E49F39B81C217 /* Onboarding */,
@@ -178,6 +183,7 @@
 			isa = PBXGroup;
 			children = (
 				F4DE2072153E3DC1397F9F14 /* Assets.xcassets */,
+				54E1D81E4A9E4E77AF4A1D77 /* Acknowledgements.json */,
 				E8F44F44DEBE209B09F32CA5 /* Info.plist */,
 				6BBD2D82A3184839D58E2778 /* SwiftFTP.entitlements */,
 			);
@@ -190,6 +196,14 @@
 				9A4F83C690D94AC0BC8D2E15 /* OnboardingView.swift */,
 			);
 			path = Onboarding;
+			sourceTree = "<group>";
+		};
+		C34A19F83D9F4F4A91AD658F /* About */ = {
+			isa = PBXGroup;
+			children = (
+				A3194D056403466F90F51F23 /* AboutView.swift */,
+			);
+			path = About;
 			sourceTree = "<group>";
 		};
 		63FF06C85277675C3140DD25 /* Data */ = {
@@ -373,6 +387,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2A7C004B3E9F4B8696D7E3E2 /* Acknowledgements.json in Resources */,
 				16E3C79C12BEC0717BC5B65B /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -403,6 +418,7 @@
 				FF3E18B97A2AE1A525C07CAD /* FileViewModels.swift in Sources */,
 				CA8048F41FEF4734219C9F8D /* KeychainManager.swift in Sources */,
 				E2FA745B60A9E95556E1ECCB /* MainViews.swift in Sources */,
+				82D09AE43B7B47F1AB776194 /* AboutView.swift in Sources */,
 				8B7D4C24A0F146859E9B1DA3 /* OnboardingView.swift in Sources */,
 				7AF829FC955B2C1D0718DA23 /* RealtimeSyncView.swift in Sources */,
 				AB785DD3E7698AE12FE6943C /* SFTPClient.swift in Sources */,

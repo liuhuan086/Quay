@@ -23,7 +23,8 @@ struct SwiftFTPApp: App {
             AppMenuCommands(
                 appState: appState,
                 onNewConnection: { appState.presentAddServer() },
-                onShowTransferQueue: { appState.transferBadgeState.requestPresentation() }
+                onShowTransferQueue: { appState.transferBadgeState.requestPresentation() },
+                onShowAbout: { appState.presentAbout() }
             )
         }
 
@@ -77,6 +78,12 @@ struct RootView: View {
                 appState.saveServer(cfg)
                 Task { await appState.connect(to: cfg) }
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.isAboutPresented },
+            set: { appState.isAboutPresented = $0 }
+        )) {
+            AboutView()
         }
         .safeAreaInset(edge: .bottom) { BottomStatusBar() }
         .background(GlobalAlertHost())
@@ -469,8 +476,12 @@ struct AppMenuCommands: Commands {
     @AppStorage("showHidden") private var showHidden = false
     let onNewConnection: () -> Void
     let onShowTransferQueue: () -> Void
+    let onShowAbout: () -> Void
 
     var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("关于 SwiftFTP", action: onShowAbout)
+        }
         CommandGroup(after: .newItem) {
             Button("导入服务器配置…") { importServers() }
             Button("导出服务器配置…") { exportServers() }
