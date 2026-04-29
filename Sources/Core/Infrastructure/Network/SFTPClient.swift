@@ -545,6 +545,8 @@ final class KnownHostsManager: @unchecked Sendable {
         if let fileURLOverride {
             return fileURLOverride
         }
+        // FIXME(AppSandbox): verify this resolves inside the app container once
+        // sandbox signing is enabled for Mac App Store builds.
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return support.appendingPathComponent("SwiftFTP/known_hosts.json")
     }

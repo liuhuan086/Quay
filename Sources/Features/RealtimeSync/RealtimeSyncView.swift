@@ -341,6 +341,8 @@ private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let urls = Self.fileURLs(from: sender)
         guard !urls.isEmpty else { return false }
+        // FIXME(AppSandbox): dropped folders are not durable permissions.
+        // Persist a security-scoped bookmark from NSOpenPanel before watching.
         onDrop(urls)
         return true
     }

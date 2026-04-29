@@ -369,13 +369,21 @@ struct LocalFileList: View {
                 if item.isDirectory {
                     Button("打开文件夹") { vm.enter(item) }
                 } else {
-                    Button("打开文件") { NSWorkspace.shared.open(item.url) }
+                    Button("打开文件") {
+                        // FIXME(AppSandbox): require user-selected/bookmarked access
+                        // before opening arbitrary local file URLs.
+                        NSWorkspace.shared.open(item.url)
+                    }
                 }
             }
         } primaryAction: { ids in
             guard let item = vm.sortedItems.first(where: { ids.contains($0.id) }) else { return }
             if item.isDirectory { vm.enter(item) }
-            else { NSWorkspace.shared.open(item.url) }
+            else {
+                // FIXME(AppSandbox): require user-selected/bookmarked access
+                // before opening arbitrary local file URLs.
+                NSWorkspace.shared.open(item.url)
+            }
         }
     }
 }
@@ -425,6 +433,8 @@ private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let urls = Self.fileURLs(from: sender)
         guard !urls.isEmpty else { return false }
+        // FIXME(AppSandbox): call startAccessingSecurityScopedResource()
+        // for dropped file URLs before reading them.
         onDrop(urls)
         return true
     }
