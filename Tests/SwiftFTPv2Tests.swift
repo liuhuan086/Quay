@@ -37,6 +37,11 @@ final class ServerConfigTests: XCTestCase {
         XCTAssertTrue(ConnectionProtocol.sftp.isSecure)
     }
 
+    func test_allowSelfSignedTLS_defaultsFalse() {
+        let c = ServerConfig(displayName: "T", host: "h.com", username: "u", protocol_: .ftps)
+        XCTAssertFalse(c.allowSelfSignedTLS)
+    }
+
     func test_sendable_crossActor() async {
         // ServerConfig must be passable across actor boundaries (Sendable)
         let config = ServerConfig(displayName: "T", host: "h", username: "u")

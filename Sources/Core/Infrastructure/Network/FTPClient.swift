@@ -39,11 +39,13 @@ public final class FTPClient: AnyFTPClient {
         let params: NWParameters
         if config.protocol_ == .ftps {
             let tls = NWProtocolTLS.Options()
-            sec_protocol_options_set_verify_block(
-                tls.securityProtocolOptions,
-                { _, _, complete in complete(true) },   // allow self-signed for now
-                queue
-            )
+            if config.allowSelfSignedTLS {
+                sec_protocol_options_set_verify_block(
+                    tls.securityProtocolOptions,
+                    { _, _, complete in complete(true) },
+                    queue
+                )
+            }
             params = NWParameters(tls: tls)
         } else {
             params = .tcp

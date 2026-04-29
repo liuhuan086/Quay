@@ -17,6 +17,7 @@ struct ServerEditView: View {
     @State private var notes: String
     @State private var useSSHKey: Bool
     @State private var sshKeyPath: String
+    @State private var allowSelfSignedTLS: Bool
 
     @State private var activeTab = 0
     @State private var testState: TestState = .idle
@@ -45,6 +46,7 @@ struct ServerEditView: View {
         _notes       = State(initialValue: config?.notes ?? "")
         _useSSHKey   = State(initialValue: config?.useSSHKey ?? false)
         _sshKeyPath  = State(initialValue: config?.sshKeyPath ?? "")
+        _allowSelfSignedTLS = State(initialValue: config?.allowSelfSignedTLS ?? false)
     }
 
     var isEditing: Bool { existingConfig != nil }
@@ -252,6 +254,10 @@ struct ServerEditView: View {
                 }
             }
         }
+        if protocol_ == .ftps {
+            Toggle("允许不受信任证书（FTPS）", isOn: $allowSelfSignedTLS)
+                .help("仅在连接自签名或内部测试服务器时开启。开启后无法防御证书伪造风险。")
+        }
     }
 
     // MARK: - Notes Tab
@@ -302,6 +308,7 @@ struct ServerEditView: View {
             colorLabel: colorLabel, notes: notes,
             useSSHKey: useSSHKey,
             sshKeyPath: sshKeyPath.isEmpty ? nil : sshKeyPath,
+            allowSelfSignedTLS: allowSelfSignedTLS,
             password: password,
             createdAt: existingConfig?.createdAt ?? Date(),
             lastConnectedAt: existingConfig?.lastConnectedAt
@@ -325,6 +332,7 @@ struct ServerEditView: View {
             notes: notes,
             useSSHKey: useSSHKey,
             sshKeyPath: sshKeyPath.isEmpty ? nil : sshKeyPath,
+            allowSelfSignedTLS: allowSelfSignedTLS,
             password: password
         )
         Task {
