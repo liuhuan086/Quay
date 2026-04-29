@@ -93,8 +93,6 @@ struct SidebarView: View {
     @State private var showAdd = false
     @State private var editTarget: ServerConfig?
     @State private var deleteTarget: ServerConfig?
-    @State private var lastSelectedID: UUID?
-    @State private var lastSelectedTime: Date = .distantPast
 
     var grouped: [(String, [ServerConfig])] {
         let servers = search.isEmpty ? appState.servers
@@ -111,7 +109,9 @@ struct SidebarView: View {
             // Search
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundColor(.secondary).font(.caption)
-                TextField("搜索服务器", text: $search).textFieldStyle(.plain).font(.system(size: 12))
+                TextField("搜索服务器", text: $search)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
                 if !search.isEmpty {
                     Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundColor(.secondary)
@@ -125,16 +125,6 @@ struct SidebarView: View {
             List(selection: Binding(
                 get: { appState.selectedServerID },
                 set: { newID in
-                    let now = Date()
-                    if newID == lastSelectedID,
-                       now.timeIntervalSince(lastSelectedTime) < 0.4,
-                       let server = appState.servers.first(where: { $0.id == newID }) {
-                        // Double-click: connect or disconnect
-                        let connected = appState.connectionStates[server.id]?.isConnected ?? false
-                        Task { connected ? await appState.disconnect(from: server) : await appState.connect(to: server) }
-                    }
-                    lastSelectedID = newID
-                    lastSelectedTime = now
                     DispatchQueue.main.async {
                         appState.selectedServerID = newID
                     }
@@ -144,6 +134,10 @@ struct SidebarView: View {
                     Section {
                         ForEach(servers) { s in
                             ServerRow(server: s, state: appState.connectionStates[s.id])
+                                .contentShape(Rectangle())
+                                .simultaneousGesture(TapGesture(count: 2).onEnded {
+                                    connectOrDisconnect(s)
+                                })
                                 .tag(s.id)
                                 .contextMenu { rowMenu(for: s) }
                         }
@@ -157,6 +151,7 @@ struct SidebarView: View {
             Divider()
             SidebarToolbar(onAdd: { showAdd = true })
         }
+        .background(InitialFirstResponderClearer())
         .sheet(isPresented: $showAdd) {
             ServerEditView(config: nil, servers: appState.servers) { cfg in
                 appState.saveServer(cfg)
@@ -177,6 +172,11 @@ struct SidebarView: View {
         } message: { _ in Text("此操作不可撤销") }
     }
 
+    private func connectOrDisconnect(_ server: ServerConfig) {
+        let connected = appState.connectionStates[server.id]?.isConnected ?? false
+        Task { connected ? await appState.disconnect(from: server) : await appState.connect(to: server) }
+    }
+
     @ViewBuilder
     func rowMenu(for s: ServerConfig) -> some View {
         let connected = appState.connectionStates[s.id]?.isConnected ?? false
@@ -192,6 +192,21 @@ struct SidebarView: View {
         Divider()
         Button("删除", role: .destructive) { deleteTarget = s }
     }
+}
+
+private struct InitialFirstResponderClearer: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async {
+            view.window?.makeFirstResponder(nil)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            view.window?.makeFirstResponder(nil)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 // MARK: - Server Row
