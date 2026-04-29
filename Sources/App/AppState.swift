@@ -33,6 +33,7 @@ final class AppState: ObservableObject {
     @Published var lastCompletedTransferServerID: UUID?
     @Published var isAddServerPresented = false
     @Published var isAboutPresented = false
+    @Published var isPro = false
     @Published var hasSeenOnboarding: Bool {
         didSet { UserDefaults.standard.set(hasSeenOnboarding, forKey: hasSeenOnboardingKey) }
     }
@@ -41,6 +42,7 @@ final class AppState: ObservableObject {
     let repository  = ServerRepository()
     let notifications = NotificationService()
     let transferBadgeState = TransferBadgeState()
+    let storeManager = StoreManager()
     private let syncWatchersKey = "swiftftp.v2.syncWatchers"
     private let hasSeenOnboardingKey = "hasSeenOnboarding"
 
@@ -55,14 +57,21 @@ final class AppState: ObservableObject {
         loadServers()
         loadSyncWatchers()
         wireEngine()
-        let savedMaxConcurrent = UserDefaults.standard.integer(forKey: "maxConcurrent")
-        Task { await engine.updateConcurrent(savedMaxConcurrent > 0 ? savedMaxConcurrent : 3) }
+        wireStore()
+        applyTransferConcurrency()
     }
 
     // MARK: - Server Management
     func loadServers() { servers = repository.fetchAll() }
 
     func presentAddServer() {
+        guard canAddServer else {
+            alertItem = AlertItem(
+                title: "升级到 Pro 解锁",
+                message: "免费版最多保存 1 个服务器。升级 Pro 后可添加无限服务器，并解锁实时同步和多并发传输。"
+            )
+            return
+        }
         isAddServerPresented = true
     }
 
@@ -79,8 +88,21 @@ final class AppState: ObservableObject {
     }
 
     func saveServer(_ config: ServerConfig) {
+        guard isPro || servers.contains(where: { $0.id == config.id }) || servers.count < 1 else {
+            alertItem = AlertItem(title: "升级到 Pro 解锁", message: "免费版最多保存 1 个服务器。")
+            return
+        }
         repository.save(config)
         loadServers()
+    }
+
+    var canAddServer: Bool {
+        isPro || servers.count < 1
+    }
+
+    func updateTransferConcurrencyPreference(_ value: Int) {
+        UserDefaults.standard.set(value, forKey: "maxConcurrent")
+        applyTransferConcurrency()
     }
 
     func updateServer(_ config: ServerConfig) {
@@ -120,6 +142,30 @@ final class AppState: ObservableObject {
         if let data = try? JSONEncoder().encode(list) {
             UserDefaults.standard.set(data, forKey: syncWatchersKey)
         }
+    }
+
+    private func wireStore() {
+        storeManager.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+
+        storeManager.$isPro
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.isPro = value
+                self?.applyTransferConcurrency()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func applyTransferConcurrency() {
+        let saved = UserDefaults.standard.integer(forKey: "maxConcurrent")
+        let requested = saved > 0 ? saved : 3
+        let effective = isPro ? requested : 1
+        Task { await engine.updateConcurrent(effective) }
     }
 
     // MARK: - Connection

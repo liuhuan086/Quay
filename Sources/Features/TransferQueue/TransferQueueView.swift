@@ -194,8 +194,9 @@ struct SettingsRootView: View {
                 Toggle("显示隐藏文件（.开头）", isOn: $showHidden)
                 Stepper("最大并发传输：\(maxConcurrent)", value: $maxConcurrent, in: 1...8)
                     .onChange(of: maxConcurrent) { _, newValue in
-                        Task { await appState.engine.updateConcurrent(newValue) }
+                        appState.updateTransferConcurrencyPreference(newValue)
                     }
+                    .disabled(!appState.isPro)
                 HStack {
                     Text("同步防抖延迟")
                     Slider(value: $debounce, in: 0.1...2.0, step: 0.1)
@@ -219,8 +220,38 @@ struct SettingsRootView: View {
                 }.foregroundColor(.red)
             }
             .padding().tabItem { Label("安全", systemImage: "lock.shield") }
+
+            Form {
+                if appState.isPro {
+                    Label("已解锁 Pro", systemImage: "checkmark.seal.fill")
+                        .foregroundColor(.green)
+                    Text("无限服务器、实时同步和多并发传输已启用。")
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("免费版支持 1 个服务器。升级 Pro 后解锁无限服务器、实时同步和多并发传输。")
+                        .foregroundColor(.secondary)
+                    Button("购买 Pro - $4.99") {
+                        Task { await appState.storeManager.purchasePro() }
+                    }
+                    .disabled(appState.storeManager.isLoading)
+                    Button("恢复购买") {
+                        Task { await appState.storeManager.restorePurchases() }
+                    }
+                    .disabled(appState.storeManager.isLoading)
+                }
+                if appState.storeManager.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                if let message = appState.storeManager.statusMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding().tabItem { Label("购买", systemImage: "cart") }
         }
-        .frame(width: 460, height: 260)
+        .frame(width: 500, height: 320)
         .padding()
     }
 }

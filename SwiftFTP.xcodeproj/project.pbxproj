@@ -11,6 +11,7 @@
 		16E3C79C12BEC0717BC5B65B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F4DE2072153E3DC1397F9F14 /* Assets.xcassets */; };
 		174C5E03E7335F13AB744E99 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9D78A54E0896A666C9D0C9 /* TransferQueueView.swift */; };
 		2A7C004B3E9F4B8696D7E3E2 /* Acknowledgements.json in Resources */ = {isa = PBXBuildFile; fileRef = 54E1D81E4A9E4E77AF4A1D77 /* Acknowledgements.json */; };
+		38DB3DC4B6C34869836B7C93 /* StoreManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E2F9923F5045649177B6B4 /* StoreManager.swift */; };
 		45AC706C3A65520379ECC4F2 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63D4DA4123D4A2662BA85C69 /* Entities.swift */; };
 		4EDF22ACA8476CC0A4CFADFE /* ClientFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29E43F90769F7BAC703B56B /* ClientFactory.swift */; };
 		605AA6AE2B02B6EC9EB52D1A /* AnyFTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F15BB0E1958D46266904C36 /* AnyFTPClient.swift */; };
@@ -61,6 +62,7 @@
 		A3194D056403466F90F51F23 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		C85ED3AFD83CE107BA714A41 /* TransferEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferEngine.swift; sourceTree = "<group>"; };
 		CE5410A57AB011264AE4406E /* ServerEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerEditView.swift; sourceTree = "<group>"; };
+		D8E2F9923F5045649177B6B4 /* StoreManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreManager.swift; sourceTree = "<group>"; };
 		D29E43F90769F7BAC703B56B /* ClientFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientFactory.swift; sourceTree = "<group>"; };
 		E1EDF0092FD9616B870C7463 /* SwiftFTPv2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftFTPv2Tests.swift; sourceTree = "<group>"; };
 		E8F44F44DEBE209B09F32CA5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -144,6 +146,14 @@
 				CE5410A57AB011264AE4406E /* ServerEditView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		491E293D0C864A71B7E11580 /* Billing */ = {
+			isa = PBXGroup;
+			children = (
+				D8E2F9923F5045649177B6B4 /* StoreManager.swift */,
+			);
+			path = Billing;
 			sourceTree = "<group>";
 		};
 		50DC0FC6111F60778EE0BB98 /* ConnectionManager */ = {
@@ -234,6 +244,7 @@
 		7A2FD60529A89053ECC6C9B6 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				491E293D0C864A71B7E11580 /* Billing */,
 				63FF06C85277675C3140DD25 /* Data */,
 				EB460997489008E23DB9BC74 /* Domain */,
 				7C73C1F310ED44AD5A6E5A44 /* Infrastructure */,
@@ -424,6 +435,7 @@
 				AB785DD3E7698AE12FE6943C /* SFTPClient.swift in Sources */,
 				75FDAF5CEC56804627572EF6 /* ServerEditView.swift in Sources */,
 				167C312C829CB1BA7DAA49D4 /* ServerRepository.swift in Sources */,
+				38DB3DC4B6C34869836B7C93 /* StoreManager.swift in Sources */,
 				ABDC1F2C5FF2CDA13128DE24 /* TransferEngine.swift in Sources */,
 				174C5E03E7335F13AB744E99 /* TransferQueueView.swift in Sources */,
 			);

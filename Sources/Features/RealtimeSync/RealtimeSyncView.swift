@@ -91,6 +91,7 @@ final class RealtimeSyncViewModel: ObservableObject {
     private let syncManager = SyncManager()
 
     var activeCount: Int { watchers.filter { $0.isActive }.count }
+    var isPro: Bool { appState.isPro }
 
     init(appState: AppState, server: ServerConfig) {
         self.appState = appState
@@ -193,6 +194,31 @@ struct RealtimeSyncView: View {
     @State private var excludeText = SyncWatcher.defaultExcludePatterns.joined(separator: "\n")
 
     var body: some View {
+        if !vm.isPro {
+            proLockedView
+        } else {
+            syncContent
+        }
+    }
+
+    private var proLockedView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "lock.circle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("升级到 Pro 解锁实时同步")
+                .font(.headline)
+            Text("免费版可保存 1 个服务器；Pro 版解锁实时同步、无限服务器和多并发传输。")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var syncContent: some View {
         VStack(spacing: 0) {
             // ── Header ──
             HStack {
