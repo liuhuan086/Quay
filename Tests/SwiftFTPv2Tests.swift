@@ -342,6 +342,46 @@ final class FTPErrorTests: XCTestCase {
     }
 }
 
+// MARK: - KnownHosts Tests
+final class KnownHostsManagerTests: XCTestCase {
+    private var fileURL: URL!
+    private var manager: KnownHostsManager!
+
+    override func setUp() {
+        super.setUp()
+        fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftftp-known-hosts-\(UUID().uuidString).json")
+        manager = KnownHostsManager(fileURL: fileURL)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: fileURL)
+        manager = nil
+        fileURL = nil
+        super.tearDown()
+    }
+
+    func test_firstValidationStoresFingerprint() throws {
+        try manager.validate(fingerprint: "SHA256:first", for: "example.com:22")
+        XCTAssertEqual(manager.fingerprint(for: "example.com:22"), "SHA256:first")
+    }
+
+    func test_matchingFingerprintIsAccepted() throws {
+        try manager.validate(fingerprint: "SHA256:first", for: "example.com:22")
+        XCTAssertNoThrow(try manager.validate(fingerprint: "SHA256:first", for: "example.com:22"))
+    }
+
+    func test_mismatchedFingerprintThrows() throws {
+        try manager.validate(fingerprint: "SHA256:first", for: "example.com:22")
+        XCTAssertThrowsError(try manager.validate(fingerprint: "SHA256:changed", for: "example.com:22")) { error in
+            guard case FTPError.hostKeyMismatch(let host) = error else {
+                return XCTFail("Expected hostKeyMismatch, got \(error)")
+            }
+            XCTAssertEqual(host, "example.com:22")
+        }
+    }
+}
+
 // MARK: - ContinuationBox Concurrency Tests
 final class ContinuationBoxTests: XCTestCase {
 

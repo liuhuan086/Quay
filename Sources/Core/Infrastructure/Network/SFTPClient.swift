@@ -363,7 +363,10 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
             host: host,
             port: config.port,
             authenticationMethod: authenticationMethod,
-            hostKeyValidator: .acceptAnything(),
+            hostKeyValidator: .custom(TOFUHostKeyValidator(
+                host: "\(config.host):\(config.port)",
+                knownHosts: .shared
+            )),
             reconnect: .never,
             algorithms: algorithms,
             connectTimeout: .seconds(15)
@@ -472,16 +475,64 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
     }
 }
 
+private final class TOFUHostKeyValidator: NIOSSHClientServerAuthenticationDelegate {
+    private let host: String
+    private let knownHosts: KnownHostsManager
+
+    init(host: String, knownHosts: KnownHostsManager) {
+        self.host = host
+        self.knownHosts = knownHosts
+    }
+
+    func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
+        do {
+            let fingerprint = Self.fingerprint(for: hostKey)
+            try knownHosts.validate(fingerprint: fingerprint, for: host)
+            validationCompletePromise.succeed(())
+        } catch {
+            validationCompletePromise.fail(error)
+        }
+    }
+
+    private static func fingerprint(for hostKey: NIOSSHPublicKey) -> String {
+        var buffer = ByteBufferAllocator().buffer(capacity: 512)
+        hostKey.write(to: &buffer)
+        let data = Data(buffer.readableBytesView)
+        let digest = SHA256.hash(data: data)
+        let encoded = Data(digest).base64EncodedString().replacingOccurrences(of: "=", with: "")
+        return "SHA256:\(encoded)"
+    }
+}
+
 // MARK: - Known-hosts manager (TOFU)
 final class KnownHostsManager: @unchecked Sendable {
     static let shared = KnownHostsManager()
     private var store: [String: String] = [:]
     private let lock = NSLock()
-    private init() { load() }
+    private let fileURLOverride: URL?
+
+    init(fileURL: URL? = nil) {
+        self.fileURLOverride = fileURL
+        load()
+    }
 
     func fingerprint(for host: String) -> String? {
         lock.lock(); defer { lock.unlock() }
         return store[host]
+    }
+
+    func validate(fingerprint: String, for host: String) throws {
+        lock.lock()
+        if let stored = store[host] {
+            lock.unlock()
+            guard stored == fingerprint else {
+                throw FTPError.hostKeyMismatch(host)
+            }
+            return
+        }
+        store[host] = fingerprint
+        lock.unlock()
+        save()
     }
 
     func store(fingerprint: String, for host: String) {
@@ -491,6 +542,9 @@ final class KnownHostsManager: @unchecked Sendable {
     }
 
     private var fileURL: URL {
+        if let fileURLOverride {
+            return fileURLOverride
+        }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return support.appendingPathComponent("SwiftFTP/known_hosts.json")
     }
