@@ -91,7 +91,7 @@ final class RealtimeSyncViewModel: ObservableObject {
     private let syncManager = SyncManager()
 
     var activeCount: Int { watchers.filter { $0.isActive }.count }
-    var isPro: Bool { appState.isPro }
+    var hasFullAccess: Bool { appState.hasFullAccess }
 
     init(appState: AppState, server: ServerConfig) {
         self.appState = appState
@@ -194,7 +194,7 @@ struct RealtimeSyncView: View {
     @State private var excludeText = SyncWatcher.defaultExcludePatterns.joined(separator: "\n")
 
     var body: some View {
-        if !vm.isPro {
+        if !vm.hasFullAccess {
             proLockedView
         } else {
             syncContent
@@ -206,9 +206,9 @@ struct RealtimeSyncView: View {
             Image(systemName: "lock.circle.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            Text("升级到 Pro 解锁实时同步")
+            Text("试用或购买 Pro 后使用实时同步")
                 .font(.headline)
-            Text("免费版可保存 1 个服务器；Pro 版解锁实时同步、无限服务器和多并发传输。")
+            Text("SwiftFTP 不提供永久免费版。7 天试用期内可使用全部功能；试用结束后需要购买 Pro。")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

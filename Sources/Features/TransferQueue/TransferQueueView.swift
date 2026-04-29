@@ -196,7 +196,7 @@ struct SettingsRootView: View {
                     .onChange(of: maxConcurrent) { _, newValue in
                         appState.updateTransferConcurrencyPreference(newValue)
                     }
-                    .disabled(!appState.isPro)
+                    .disabled(!appState.hasFullAccess)
                 HStack {
                     Text("同步防抖延迟")
                     Slider(value: $debounce, in: 0.1...2.0, step: 0.1)
@@ -227,9 +227,30 @@ struct SettingsRootView: View {
                         .foregroundColor(.green)
                     Text("无限服务器、实时同步和多并发传输已启用。")
                         .foregroundColor(.secondary)
-                } else {
-                    Text("免费版支持 1 个服务器。升级 Pro 后解锁无限服务器、实时同步和多并发传输。")
+                } else if appState.isTrialActive {
+                    Label("7 天试用中", systemImage: "clock.fill")
+                        .foregroundColor(.blue)
+                    Text("剩余约 \(appState.trialDaysRemaining) 天。试用结束后需要购买 Pro 才能继续使用。")
                         .foregroundColor(.secondary)
+                    Button("购买 Pro - $4.99") {
+                        Task { await appState.storeManager.purchasePro() }
+                    }
+                    .disabled(appState.storeManager.isLoading)
+                    Button("恢复购买") {
+                        Task { await appState.storeManager.restorePurchases() }
+                    }
+                    .disabled(appState.storeManager.isLoading)
+                } else {
+                    Text(appState.trialStartedAt == nil
+                         ? "SwiftFTP 不提供永久免费版。开始 7 天试用可使用全部功能；试用结束后需要购买 Pro。"
+                         : "7 天试用已结束。购买 Pro 后继续使用全部功能。")
+                        .foregroundColor(.secondary)
+                    if appState.trialStartedAt == nil {
+                        Button("开始 7 天试用") {
+                            appState.startTrial()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                     Button("购买 Pro - $4.99") {
                         Task { await appState.storeManager.purchasePro() }
                     }

@@ -63,6 +63,10 @@ struct RootView: View {
                 OnboardingView(onFinish: { appState.completeOnboarding() })
                     .transition(.opacity)
                     .zIndex(10)
+            } else if !appState.hasFullAccess {
+                TrialPaywallView(appState: appState)
+                    .transition(.opacity)
+                    .zIndex(10)
             }
         }
         .toolbar {
@@ -97,6 +101,96 @@ private struct GlobalAlertHost: View {
         Color.clear.alert(item: $appState.alertItem) { item in
             Alert(title: Text(item.title), message: Text(item.message))
         }
+    }
+}
+
+private struct TrialPaywallView: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        ZStack {
+            Color(NSColor.windowBackgroundColor).ignoresSafeArea()
+
+            VStack(spacing: 22) {
+                Image(systemName: "lock.open.display")
+                    .font(.system(size: 62, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.blue)
+
+                VStack(spacing: 8) {
+                    Text(paywallTitle)
+                        .font(.system(size: 30, weight: .semibold))
+                    Text(paywallSubtitle)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                        .frame(maxWidth: 460)
+                }
+
+                VStack(spacing: 10) {
+                    if appState.trialStartedAt == nil {
+                        Button("开始 7 天试用") {
+                            appState.startTrial()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                    }
+
+                    if appState.trialStartedAt == nil {
+                        Button("购买 Pro - $4.99") {
+                            Task { await appState.storeManager.purchasePro() }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .disabled(appState.storeManager.isLoading)
+                    } else {
+                        Button("购买 Pro - $4.99") {
+                            Task { await appState.storeManager.purchasePro() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(appState.storeManager.isLoading)
+                    }
+
+                    Button("恢复购买") {
+                        Task { await appState.storeManager.restorePurchases() }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(appState.storeManager.isLoading)
+                }
+
+                if appState.storeManager.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                if let message = appState.storeManager.statusMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 420)
+                }
+
+                Text("试用结束后，未购买 Pro 将无法继续访问服务器、传输、实时同步和设置中的高级功能。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+            }
+            .padding(36)
+        }
+    }
+
+    private var paywallTitle: String {
+        appState.trialStartedAt == nil ? "7 天完整试用" : "试用已结束"
+    }
+
+    private var paywallSubtitle: String {
+        if appState.trialStartedAt == nil {
+            return "SwiftFTP 不提供永久免费版。试用期内可使用全部功能；试用结束后需要购买 Pro 继续使用。"
+        }
+        return "你的 7 天试用期已结束。购买 Pro 后可继续使用全部功能。"
     }
 }
 

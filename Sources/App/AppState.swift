@@ -34,6 +34,16 @@ final class AppState: ObservableObject {
     @Published var isAddServerPresented = false
     @Published var isAboutPresented = false
     @Published var isPro = false
+    @Published var trialStartedAt: Date? {
+        didSet {
+            if let trialStartedAt {
+                UserDefaults.standard.set(trialStartedAt, forKey: trialStartedAtKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: trialStartedAtKey)
+            }
+        }
+    }
+    @Published private var entitlementRefreshDate = Date()
     @Published var hasSeenOnboarding: Bool {
         didSet { UserDefaults.standard.set(hasSeenOnboarding, forKey: hasSeenOnboardingKey) }
     }
@@ -45,6 +55,8 @@ final class AppState: ObservableObject {
     let storeManager = StoreManager()
     private let syncWatchersKey = "swiftftp.v2.syncWatchers"
     private let hasSeenOnboardingKey = "hasSeenOnboarding"
+    private let trialStartedAtKey = "trialStartedAt"
+    private let trialLength: TimeInterval = 7 * 24 * 60 * 60
 
     // Transfer engine (actor)
     let engine = TransferEngine()
@@ -54,10 +66,12 @@ final class AppState: ObservableObject {
     // MARK: - Init
     init() {
         hasSeenOnboarding = UserDefaults.standard.bool(forKey: hasSeenOnboardingKey)
+        trialStartedAt = UserDefaults.standard.object(forKey: trialStartedAtKey) as? Date
         loadServers()
         loadSyncWatchers()
         wireEngine()
         wireStore()
+        wireTrialTimer()
         applyTransferConcurrency()
     }
 
@@ -65,10 +79,10 @@ final class AppState: ObservableObject {
     func loadServers() { servers = repository.fetchAll() }
 
     func presentAddServer() {
-        guard canAddServer else {
+        guard hasFullAccess else {
             alertItem = AlertItem(
-                title: "升级到 Pro 解锁",
-                message: "免费版最多保存 1 个服务器。升级 Pro 后可添加无限服务器，并解锁实时同步和多并发传输。"
+                title: "试用已结束",
+                message: "SwiftFTP 不提供永久免费版。请开始 7 天试用或购买 Pro 后继续使用。"
             )
             return
         }
@@ -88,16 +102,40 @@ final class AppState: ObservableObject {
     }
 
     func saveServer(_ config: ServerConfig) {
-        guard isPro || servers.contains(where: { $0.id == config.id }) || servers.count < 1 else {
-            alertItem = AlertItem(title: "升级到 Pro 解锁", message: "免费版最多保存 1 个服务器。")
+        guard hasFullAccess || servers.contains(where: { $0.id == config.id }) else {
+            alertItem = AlertItem(title: "试用已结束", message: "请购买 Pro 后保存服务器配置。")
             return
         }
         repository.save(config)
         loadServers()
     }
 
-    var canAddServer: Bool {
-        isPro || servers.count < 1
+    var hasFullAccess: Bool {
+        isPro || isTrialActive
+    }
+
+    var isTrialActive: Bool {
+        guard let trialStartedAt else { return false }
+        _ = entitlementRefreshDate
+        return Date().timeIntervalSince(trialStartedAt) < trialLength
+    }
+
+    var trialEndsAt: Date? {
+        trialStartedAt?.addingTimeInterval(trialLength)
+    }
+
+    var trialDaysRemaining: Int {
+        guard let trialEndsAt else { return 0 }
+        _ = entitlementRefreshDate
+        let remaining = trialEndsAt.timeIntervalSince(Date())
+        return max(0, Int(ceil(remaining / (24 * 60 * 60))))
+    }
+
+    func startTrial() {
+        guard trialStartedAt == nil else { return }
+        trialStartedAt = Date()
+        entitlementRefreshDate = Date()
+        applyTransferConcurrency()
     }
 
     func updateTransferConcurrencyPreference(_ value: Int) {
@@ -161,10 +199,20 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
     }
 
+    private func wireTrialTimer() {
+        Timer.publish(every: 60, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] now in
+                self?.entitlementRefreshDate = now
+                self?.applyTransferConcurrency()
+            }
+            .store(in: &cancellables)
+    }
+
     private func applyTransferConcurrency() {
         let saved = UserDefaults.standard.integer(forKey: "maxConcurrent")
         let requested = saved > 0 ? saved : 3
-        let effective = isPro ? requested : 1
+        let effective = hasFullAccess ? requested : 1
         Task { await engine.updateConcurrent(effective) }
     }
 
