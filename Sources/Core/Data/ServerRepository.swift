@@ -2,30 +2,50 @@
 import Foundation
 
 final class ServerRepository: @unchecked Sendable {
-    private let key = "swiftftp.v2.servers"
+    private let key: String
     private let enc = JSONEncoder()
     private let dec = JSONDecoder()
+    private let keychain: KeychainManager
 
-    init() {
+    init(key: String = "swiftftp.v2.servers", keychain: KeychainManager = .shared) {
+        self.key = key
+        self.keychain = keychain
         enc.dateEncodingStrategy = .iso8601
         dec.dateDecodingStrategy = .iso8601
     }
 
     func fetchAll() -> [ServerConfig] {
         guard let data = UserDefaults.standard.data(forKey: key),
-              let list = try? dec.decode([ServerConfig].self, from: data) else { return [] }
+              var list = try? dec.decode([ServerConfig].self, from: data) else { return [] }
+        var migratedLegacyPassword = false
+        for i in list.indices {
+            let account = credentialAccount(for: list[i].id)
+            if !list[i].password.isEmpty {
+                _ = try? keychain.savePassword(list[i].password, for: account)
+                list[i].password = ""
+                migratedLegacyPassword = true
+            }
+            list[i].password = (try? keychain.getPassword(for: account)) ?? ""
+        }
+        if migratedLegacyPassword {
+            persist(list)
+        }
         return list.sorted { $0.displayName < $1.displayName }
     }
 
     func save(_ c: ServerConfig) {
+        persistCredential(for: c)
         var all = fetchAll()
-        if let i = all.firstIndex(where: { $0.id == c.id }) { all[i] = c } else { all.append(c) }
+        var stored = c
+        stored.password = ""
+        if let i = all.firstIndex(where: { $0.id == c.id }) { all[i] = stored } else { all.append(stored) }
         persist(all)
     }
 
     func update(_ c: ServerConfig) { save(c) }
 
     func delete(_ id: UUID) {
+        keychain.deletePassword(for: credentialAccount(for: id))
         var all = fetchAll(); all.removeAll { $0.id == id }; persist(all)
     }
 
@@ -34,12 +54,34 @@ final class ServerRepository: @unchecked Sendable {
     func importJSON(_ data: Data) throws {
         let incoming = try dec.decode([ServerConfig].self, from: data)
         var all = fetchAll()
-        for c in incoming where !all.contains(where: { $0.id == c.id }) { all.append(c) }
+        for c in incoming where !all.contains(where: { $0.id == c.id }) {
+            persistCredential(for: c)
+            var stored = c
+            stored.password = ""
+            all.append(stored)
+        }
         persist(all)
     }
 
     private func persist(_ list: [ServerConfig]) {
-        if let d = try? enc.encode(list) { UserDefaults.standard.set(d, forKey: key) }
+        var sanitized = list
+        for i in sanitized.indices {
+            sanitized[i].password = ""
+        }
+        if let d = try? enc.encode(sanitized) { UserDefaults.standard.set(d, forKey: key) }
+    }
+
+    private func persistCredential(for config: ServerConfig) {
+        let account = credentialAccount(for: config.id)
+        if config.password.isEmpty {
+            keychain.deletePassword(for: account)
+        } else {
+            _ = try? keychain.savePassword(config.password, for: account)
+        }
+    }
+
+    private func credentialAccount(for id: UUID) -> String {
+        id.uuidString
     }
 }
 

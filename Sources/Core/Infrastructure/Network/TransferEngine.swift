@@ -47,7 +47,7 @@ actor TransferEngine {
         }
     }
 
-    func resume(id: UUID, password: String) {
+    func resume(id: UUID) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }),
               case .paused(let offset) = tasks[idx].status else { return }
         tasks[idx].resumeOffset = offset
@@ -91,7 +91,7 @@ actor TransferEngine {
         tasks[idx] = task
         notifyUpdate(task)
 
-        let password = task.serverPassword
+        let password = (try? KeychainManager.shared.getPassword(for: task.serverID.uuidString)) ?? ""
         guard let pool = await ConnectionPoolRegistry.shared.existingPool(forServerID: task.serverID) else {
             markFailed(id: id, message: "连接池不存在，请先连接服务器")
             return
@@ -128,12 +128,12 @@ actor TransferEngine {
         } catch is CancellationError {
             // Task was cancelled / paused — state already set by caller
         } catch {
-            await handleError(id: id, error: error, password: password)
+            await handleError(id: id, error: error)
         }
     }
 
     // MARK: - Error handling + auto-retry
-    private func handleError(id: UUID, error: Error, password: String) async {
+    private func handleError(id: UUID, error: Error) async {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
         let friendly = FTPError.friendly(error)
 
