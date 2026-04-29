@@ -49,6 +49,8 @@ final class AppState: ObservableObject {
         loadServers()
         loadSyncWatchers()
         wireEngine()
+        let savedMaxConcurrent = UserDefaults.standard.integer(forKey: "maxConcurrent")
+        Task { await engine.updateConcurrent(savedMaxConcurrent > 0 ? savedMaxConcurrent : 3) }
     }
 
     // MARK: - Server Management

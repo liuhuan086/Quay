@@ -187,7 +187,6 @@ struct SettingsRootView: View {
     @AppStorage("maxConcurrent") var maxConcurrent = 3
     @AppStorage("showHidden") var showHidden = false
     @AppStorage("debounce") var debounce = 0.5
-    @AppStorage("verifyMD5") var verifyMD5 = false
 
     var body: some View {
         TabView {
@@ -197,7 +196,6 @@ struct SettingsRootView: View {
                     .onChange(of: maxConcurrent) { _, newValue in
                         Task { await appState.engine.updateConcurrent(newValue) }
                     }
-                Toggle("传输后校验 MD5", isOn: $verifyMD5)
                 HStack {
                     Text("同步防抖延迟")
                     Slider(value: $debounce, in: 0.1...2.0, step: 0.1)
@@ -222,8 +220,4 @@ struct SettingsRootView: View {
         .frame(width: 460, height: 260)
         .padding()
     }
-}
-
-extension TransferEngine {
-    func updateConcurrent(_ n: Int) { maxConcurrent = n }
 }

@@ -25,12 +25,12 @@ public final class FSEventWatcher: @unchecked Sendable {
 
     private var streamRef: FSEventStreamRef?
     private let debounceQueue = DispatchQueue(label: "com.swiftftp.fsevents", qos: .utility)
-    private let debounceDelay: TimeInterval
+    private let fixedDebounceDelay: TimeInterval?
     private let lock = NSLock()
     private var pendingWork: [String: DispatchWorkItem] = [:]
 
-    public init(debounceDelay: TimeInterval = 0.5) {
-        self.debounceDelay = debounceDelay
+    public init(debounceDelay: TimeInterval? = nil) {
+        self.fixedDebounceDelay = debounceDelay
     }
 
     // MARK: - Start
@@ -114,10 +114,18 @@ public final class FSEventWatcher: @unchecked Sendable {
         }
         pendingWork[path] = work
         lock.unlock()
-        debounceQueue.asyncAfter(deadline: .now() + debounceDelay, execute: work)
+        debounceQueue.asyncAfter(deadline: .now() + effectiveDebounceDelay, execute: work)
     }
 
     deinit { stopWatching() }
+
+    private var effectiveDebounceDelay: TimeInterval {
+        if let fixedDebounceDelay {
+            return min(max(fixedDebounceDelay, 0.1), 2.0)
+        }
+        let saved = UserDefaults.standard.double(forKey: "debounce")
+        return saved > 0 ? min(max(saved, 0.1), 2.0) : 0.5
+    }
 }
 
 // MARK: - Exclusion Matcher
