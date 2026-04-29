@@ -25,6 +25,11 @@ actor TransferEngine {
         drainQueue()
     }
 
+    func updateConcurrent(_ n: Int) {
+        maxConcurrent = min(max(n, 1), 8)
+        drainQueue()
+    }
+
     // MARK: - Pause / Cancel
     func cancel(id: UUID) {
         runningTasks[id]?.cancel()
