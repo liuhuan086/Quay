@@ -201,6 +201,9 @@ struct SettingsRootView: View {
                     Slider(value: $debounce, in: 0.1...2.0, step: 0.1)
                     Text("\(debounce, specifier: "%.1f")s").frame(width: 36)
                 }
+                Button("重新观看引导") {
+                    appState.resetOnboarding()
+                }
             }
             .padding().tabItem { Label("通用", systemImage: "gear") }
 

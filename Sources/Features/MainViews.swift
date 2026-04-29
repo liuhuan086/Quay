@@ -50,11 +50,19 @@ struct RootView: View {
     @State private var colVisibility = NavigationSplitViewVisibility.all
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $colVisibility) {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
-        } detail: {
-            DetailView()
+        ZStack {
+            NavigationSplitView(columnVisibility: $colVisibility) {
+                SidebarView()
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
+            } detail: {
+                DetailView()
+            }
+
+            if !appState.hasSeenOnboarding {
+                OnboardingView(onFinish: { appState.completeOnboarding() })
+                    .transition(.opacity)
+                    .zIndex(10)
+            }
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {

@@ -32,12 +32,16 @@ final class AppState: ObservableObject {
     @Published var alertItem: AlertItem?
     @Published var lastCompletedTransferServerID: UUID?
     @Published var isAddServerPresented = false
+    @Published var hasSeenOnboarding: Bool {
+        didSet { UserDefaults.standard.set(hasSeenOnboarding, forKey: hasSeenOnboardingKey) }
+    }
 
     // MARK: - Services
     let repository  = ServerRepository()
     let notifications = NotificationService()
     let transferBadgeState = TransferBadgeState()
     private let syncWatchersKey = "swiftftp.v2.syncWatchers"
+    private let hasSeenOnboardingKey = "hasSeenOnboarding"
 
     // Transfer engine (actor)
     let engine = TransferEngine()
@@ -46,6 +50,7 @@ final class AppState: ObservableObject {
 
     // MARK: - Init
     init() {
+        hasSeenOnboarding = UserDefaults.standard.bool(forKey: hasSeenOnboardingKey)
         loadServers()
         loadSyncWatchers()
         wireEngine()
@@ -58,6 +63,14 @@ final class AppState: ObservableObject {
 
     func presentAddServer() {
         isAddServerPresented = true
+    }
+
+    func completeOnboarding() {
+        hasSeenOnboarding = true
+    }
+
+    func resetOnboarding() {
+        hasSeenOnboarding = false
     }
 
     func saveServer(_ config: ServerConfig) {
