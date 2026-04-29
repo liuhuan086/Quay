@@ -5,6 +5,7 @@ import Combine
 @MainActor
 final class TransferBadgeState: ObservableObject {
     @Published private(set) var activeCount = 0
+    @Published private(set) var presentationRequestID: UUID?
 
     func update(from transfers: [TransferTask]) {
         let count = transfers.filter {
@@ -13,6 +14,10 @@ final class TransferBadgeState: ObservableObject {
         }.count
         guard count != activeCount else { return }
         activeCount = count
+    }
+
+    func requestPresentation() {
+        presentationRequestID = UUID()
     }
 }
 
@@ -26,6 +31,7 @@ final class AppState: ObservableObject {
     @Published var selectedServerID: UUID?
     @Published var alertItem: AlertItem?
     @Published var lastCompletedTransferServerID: UUID?
+    @Published var isAddServerPresented = false
 
     // MARK: - Services
     let repository  = ServerRepository()
@@ -47,6 +53,10 @@ final class AppState: ObservableObject {
 
     // MARK: - Server Management
     func loadServers() { servers = repository.fetchAll() }
+
+    func presentAddServer() {
+        isAddServerPresented = true
+    }
 
     func saveServer(_ config: ServerConfig) {
         repository.save(config)

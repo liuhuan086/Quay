@@ -122,7 +122,6 @@ struct TransferRow: View {
 // MARK: - WelcomeView
 struct WelcomeView: View {
     @EnvironmentObject var appState: AppState
-    @State private var showAdd = false
 
     var body: some View {
         VStack(spacing: 28) {
@@ -136,7 +135,7 @@ struct WelcomeView: View {
             }
 
             HStack(spacing: 14) {
-                Button { showAdd = true } label: {
+                Button { appState.presentAddServer() } label: {
                     Label("新建连接", systemImage: "plus.circle")
                 }.buttonStyle(.borderedProminent).controlSize(.large)
 
@@ -179,9 +178,6 @@ struct WelcomeView: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
-        .sheet(isPresented: $showAdd) {
-            ServerEditView(config: nil, servers: appState.servers) { cfg in appState.saveServer(cfg) }
-        }
     }
 }
 

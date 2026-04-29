@@ -7,6 +7,7 @@ struct FileBrowserView: View {
     let appState: AppState
     let server: ServerConfig
     let primaryClient: any AnyFTPClient
+    @AppStorage("showHidden") private var showHidden = false
 
     @StateObject private var localVM  = LocalFileVM()
     @StateObject private var remoteVM: RemoteFileVM
@@ -126,6 +127,12 @@ struct FileBrowserView: View {
                 localVM.refresh()
             }
         )
+        .onAppear {
+            applyShowHidden(showHidden)
+        }
+        .onChange(of: showHidden) { _, newValue in
+            applyShowHidden(newValue)
+        }
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button {
@@ -155,6 +162,11 @@ struct FileBrowserView: View {
             let names = pendingOverwriteFiles.map(\.fileName).joined(separator: "\n")
             Text("以下文件已存在，是否覆盖？\n\(names)")
         }
+    }
+
+    private func applyShowHidden(_ value: Bool) {
+        localVM.showHidden = value
+        remoteVM.showHidden = value
     }
 
     // MARK: - Upload drop handler

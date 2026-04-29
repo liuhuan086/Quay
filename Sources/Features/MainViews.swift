@@ -19,7 +19,13 @@ struct SwiftFTPApp: App {
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
-        .commands { AppMenuCommands() }
+        .commands {
+            AppMenuCommands(
+                appState: appState,
+                onNewConnection: { appState.presentAddServer() },
+                onShowTransferQueue: { appState.transferBadgeState.requestPresentation() }
+            )
+        }
 
         Settings { SettingsRootView().environmentObject(appState) }
     }
@@ -53,6 +59,15 @@ struct RootView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 TransferBadgeButton(appState: appState)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.isAddServerPresented },
+            set: { appState.isAddServerPresented = $0 }
+        )) {
+            ServerEditView(config: nil, servers: appState.servers) { cfg in
+                appState.saveServer(cfg)
+                Task { await appState.connect(to: cfg) }
             }
         }
         .safeAreaInset(edge: .bottom) { BottomStatusBar() }
@@ -90,7 +105,6 @@ struct DetailView: View {
 struct SidebarView: View {
     @EnvironmentObject var appState: AppState
     @State private var search = ""
-    @State private var showAdd = false
     @State private var editTarget: ServerConfig?
     @State private var deleteTarget: ServerConfig?
 
@@ -149,15 +163,9 @@ struct SidebarView: View {
             .listStyle(.sidebar)
 
             Divider()
-            SidebarToolbar(onAdd: { showAdd = true })
+            SidebarToolbar(onAdd: { appState.presentAddServer() })
         }
         .background(InitialFirstResponderClearer())
-        .sheet(isPresented: $showAdd) {
-            ServerEditView(config: nil, servers: appState.servers) { cfg in
-                appState.saveServer(cfg)
-                Task { await appState.connect(to: cfg) }
-            }
-        }
         .sheet(item: $editTarget) { server in
             ServerEditView(config: server, servers: appState.servers) { cfg in
                 appState.updateServer(cfg)
@@ -335,6 +343,7 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
         host.toolTip = badgeState.activeCount > 0
             ? "传输队列（\(badgeState.activeCount) 进行中）" : "传输队列"
         coord.host = host
+        coord.bindPresentationRequestIfNeeded()
         return host
     }
 
@@ -349,6 +358,7 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
         weak var host: ClickableHostingView<TransferBadgeContent>?
         let popover: NSPopover
         private var cancellable: AnyCancellable?
+        private var presentationCancellable: AnyCancellable?
         private var refreshScheduled = false
         private var renderedActiveCount: Int?
 
@@ -371,6 +381,11 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
                 popover.performClose(nil)
                 return
             }
+            show()
+        }
+
+        func show() {
+            guard !popover.isShown else { return }
             guard let host else { return }
             let content = NSHostingController(
                 rootView: TransferQueueView()
@@ -380,6 +395,15 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
             popover.contentViewController = content
             popover.contentSize = NSSize(width: 420, height: 380)
             popover.show(relativeTo: host.bounds, of: host, preferredEdge: .minY)
+        }
+
+        func bindPresentationRequestIfNeeded() {
+            guard presentationCancellable == nil else { return }
+            presentationCancellable = badgeState.$presentationRequestID
+                .compactMap { $0 }
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.show() }
+                }
         }
 
         func scheduleRefreshIcon() {
@@ -433,12 +457,63 @@ private struct TransferBadgeContent: View {
 
 // MARK: - App Menu Commands
 struct AppMenuCommands: Commands {
+    @ObservedObject var appState: AppState
+    @AppStorage("showHidden") private var showHidden = false
+    let onNewConnection: () -> Void
+    let onShowTransferQueue: () -> Void
+
     var body: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("导入服务器配置…") { importServers() }
+            Button("导出服务器配置…") { exportServers() }
+                .disabled(appState.servers.isEmpty)
+            Divider()
+        }
+        CommandGroup(after: .toolbar) {
+            Toggle("显示隐藏文件", isOn: $showHidden)
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+            Divider()
+        }
         CommandMenu("连接") {
-            Button("新建连接…") {}.keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("新建连接…", action: onNewConnection)
+                .keyboardShortcut("n", modifiers: [.command, .shift])
         }
         CommandMenu("传输") {
-            Button("显示传输队列") {}.keyboardShortcut("t", modifiers: [.command, .shift])
+            Button("显示传输队列", action: onShowTransferQueue)
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+        }
+    }
+
+    private func exportServers() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "SwiftFTP-Servers.json"
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let data = try appState.repository.exportJSON()
+                try data.write(to: url, options: .atomic)
+            } catch {
+                appState.showError(error)
+            }
+        }
+    }
+
+    private func importServers() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let data = try Data(contentsOf: url)
+                try appState.repository.importJSON(data)
+                appState.loadServers()
+            } catch {
+                appState.showError(error)
+            }
         }
     }
 }
