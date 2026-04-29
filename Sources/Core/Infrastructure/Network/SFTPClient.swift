@@ -32,7 +32,7 @@ private final class TCPProbeContinuation: @unchecked Sendable {
 // MARK: - SFTPClient
 public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
     public let config: ServerConfig
-    public let supportsResume: Bool = false
+    public let supportsResume: Bool = true
 
     private let queue = DispatchQueue(label: "com.swiftftp.sftp.\(UUID().uuidString)", qos: .userInitiated)
 
@@ -214,24 +214,33 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
     ) async throws {
         let sftp = try getSFTP()
         do {
-            let fileData = try Data(contentsOf: localURL)
-            let total = Int64(fileData.count)
+            let attrs = try FileManager.default.attributesOfItem(atPath: localURL.path)
+            let total = (attrs[.size] as? Int64) ?? 0
+            guard offset <= total else {
+                throw FTPError.transferFailed("续传偏移量超过本地文件大小")
+            }
 
-            try await sftp.withFile(filePath: remotePath, flags: [.create, .write, .truncate]) { file in
-                let chunkSize = 32_000
-                var written: Int64 = 0
+            let flags: SFTPOpenFileFlags = offset > 0 ? [.create, .write] : [.create, .write, .truncate]
+            try await sftp.withFile(filePath: remotePath, flags: flags) { file in
+                let handle = try FileHandle(forReadingFrom: localURL)
+                defer { try? handle.close() }
+                if offset > 0 {
+                    try handle.seek(toOffset: UInt64(offset))
+                }
+
+                let chunkSize = 32_768
+                var written = offset
                 var lastTime = Date()
-                var lastBytes: Int64 = 0
-                var readOffset = 0
+                var lastBytes = written
                 var bps: Int64 = 0
+                var buffer = ByteBufferAllocator().buffer(capacity: chunkSize)
 
-                while readOffset < fileData.count {
-                    let end = min(readOffset + chunkSize, fileData.count)
-                    let chunk = fileData[readOffset..<end]
-                    let buffer = ByteBuffer(data: chunk)
-                    try await file.write(buffer, at: UInt64(readOffset))
-                    readOffset = end
-                    written = Int64(readOffset)
+                while true {
+                    guard let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty else { break }
+                    buffer.clear(minimumCapacity: chunkSize)
+                    buffer.writeBytes(chunk)
+                    try await file.write(buffer, at: UInt64(written))
+                    written += Int64(chunk.count)
 
                     let now = Date()
                     let elapsed = now.timeIntervalSince(lastTime)
