@@ -298,11 +298,12 @@ public enum ConnectionState {
 }
 
 // MARK: - Sync Watcher
-public struct SyncWatcher: Identifiable, Sendable {
+public struct SyncWatcher: Identifiable, Codable, Sendable {
     public let id: UUID
     public let serverID: UUID
     public let serverName: String
     public var localPath: String
+    public var localPathBookmark: Data?
     public var remotePath: String
     public var excludePatterns: [String]
     public var isActive: Bool

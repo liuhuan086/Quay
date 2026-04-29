@@ -31,6 +31,7 @@ final class AppState: ObservableObject {
     let repository  = ServerRepository()
     let notifications = NotificationService()
     let transferBadgeState = TransferBadgeState()
+    private let syncWatchersKey = "swiftftp.v2.syncWatchers"
 
     // Transfer engine (actor)
     let engine = TransferEngine()
@@ -40,6 +41,7 @@ final class AppState: ObservableObject {
     // MARK: - Init
     init() {
         loadServers()
+        loadSyncWatchers()
         wireEngine()
     }
 
@@ -60,8 +62,34 @@ final class AppState: ObservableObject {
         await ConnectionPoolRegistry.shared.removePool(for: config.id)
         repository.delete(config.id)
         connectionStates.removeValue(forKey: config.id)
+        syncWatchers = syncWatchers.filter { $0.value.serverID != config.id }
+        persistSyncWatchers()
         loadServers()
         if selectedServerID == config.id { selectedServerID = nil }
+    }
+
+    // MARK: - Sync Watchers
+    func upsertSyncWatcher(_ watcher: SyncWatcher) {
+        syncWatchers[watcher.id] = watcher
+        persistSyncWatchers()
+    }
+
+    func removeSyncWatcher(_ watcher: SyncWatcher) {
+        syncWatchers.removeValue(forKey: watcher.id)
+        persistSyncWatchers()
+    }
+
+    private func loadSyncWatchers() {
+        guard let data = UserDefaults.standard.data(forKey: syncWatchersKey),
+              let decoded = try? JSONDecoder().decode([SyncWatcher].self, from: data) else { return }
+        syncWatchers = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+    }
+
+    private func persistSyncWatchers() {
+        let list = Array(syncWatchers.values)
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: syncWatchersKey)
+        }
     }
 
     // MARK: - Connection

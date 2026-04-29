@@ -316,6 +316,41 @@ final class ExclusionMatcherTests: XCTestCase {
     }
 }
 
+// MARK: - SyncWatcher Bookmark Tests
+final class SyncWatcherBookmarkTests: XCTestCase {
+
+    func test_securityScopedBookmark_roundTripsPath() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftftp-bookmark-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let bookmark: Data
+        do {
+            bookmark = try directory.bookmarkData(
+                options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } catch {
+            let ns = error as NSError
+            if ns.domain == NSCocoaErrorDomain && ns.code == 256 {
+                throw XCTSkip("Security-scoped bookmarks require a signed app-scope test host")
+            }
+            throw error
+        }
+        var stale = false
+        let resolved = try URL(
+            resolvingBookmarkData: bookmark,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &stale
+        )
+        XCTAssertFalse(stale)
+        XCTAssertEqual(resolved.path, directory.path)
+    }
+}
+
 // MARK: - FTPError Tests
 final class FTPErrorTests: XCTestCase {
 

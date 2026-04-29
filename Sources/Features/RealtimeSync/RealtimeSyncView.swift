@@ -7,20 +7,53 @@ import AppKit
 actor SyncManager {
     private let watcher = FSEventWatcher()
     private var cancellables = Set<AnyCancellable>()
+    private var scopedURLs: [URL] = []
     var onFileChange: (@Sendable (FileChangeEvent, SyncWatcher) -> Void)?
+    var onBookmarkStale: (@Sendable (SyncWatcher) -> Void)?
 
     func start(watchers: [SyncWatcher]) {
+        stopAll()
         let active = watchers.filter { $0.isActive }
-        guard !active.isEmpty else { stopAll(); return }
+        guard !active.isEmpty else { return }
 
-        let paths = active.map { $0.localPath }
+        var usableWatchers: [SyncWatcher] = []
+        var paths: [String] = []
+        for watcher in active {
+            guard let bookmark = watcher.localPathBookmark else {
+                onBookmarkStale?(watcher)
+                continue
+            }
+
+            do {
+                var isStale = false
+                let url = try URL(
+                    resolvingBookmarkData: bookmark,
+                    options: [.withSecurityScope],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+                guard !isStale else {
+                    onBookmarkStale?(watcher)
+                    continue
+                }
+                if url.startAccessingSecurityScopedResource() {
+                    scopedURLs.append(url)
+                }
+                usableWatchers.append(watcher)
+                paths.append(url.path)
+            } catch {
+                onBookmarkStale?(watcher)
+            }
+        }
+        guard !paths.isEmpty else { return }
+        let dispatchWatchers = usableWatchers
         watcher.startWatching(paths: paths)
 
         watcher.eventPublisher
             .receive(on: RunLoop.main)
             .sink { [weak self] event in
                 Task { [weak self] in
-                    await self?.dispatch(event: event, watchers: active)
+                    await self?.dispatch(event: event, watchers: dispatchWatchers)
                 }
             }
             .store(in: &cancellables)
@@ -29,6 +62,10 @@ actor SyncManager {
     func stopAll() {
         watcher.stopWatching()
         cancellables.removeAll()
+        for url in scopedURLs {
+            url.stopAccessingSecurityScopedResource()
+        }
+        scopedURLs.removeAll()
     }
 
     private func dispatch(event: FileChangeEvent, watchers: [SyncWatcher]) {
@@ -63,29 +100,29 @@ final class RealtimeSyncViewModel: ObservableObject {
     }
 
     // MARK: - Add watcher
-    func addWatcher(localPath: String, remotePath: String, excludePatterns: [String]) {
+    func addWatcher(localPath: String, localPathBookmark: Data, remotePath: String, excludePatterns: [String]) {
         let w = SyncWatcher(
             id: UUID(), serverID: server.id, serverName: server.displayName,
-            localPath: localPath, remotePath: remotePath,
+            localPath: localPath, localPathBookmark: localPathBookmark, remotePath: remotePath,
             excludePatterns: excludePatterns, isActive: false,
             lastSyncAt: nil, totalSynced: 0
         )
         watchers.append(w)
-        appState.syncWatchers[w.id] = w
+        appState.upsertSyncWatcher(w)
     }
 
     // MARK: - Toggle active
     func toggle(_ watcher: SyncWatcher) {
         guard let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
         watchers[idx].isActive.toggle()
-        appState.syncWatchers[watcher.id] = watchers[idx]
+        appState.upsertSyncWatcher(watchers[idx])
         refreshWatcher()
     }
 
     // MARK: - Remove watcher
     func remove(_ watcher: SyncWatcher) {
         watchers.removeAll { $0.id == watcher.id }
-        appState.syncWatchers.removeValue(forKey: watcher.id)
+        appState.removeSyncWatcher(watcher)
         refreshWatcher()
     }
 
@@ -114,9 +151,17 @@ final class RealtimeSyncViewModel: ObservableObject {
                     if let i = self.watchers.firstIndex(where: { $0.id == watcher.id }) {
                         self.watchers[i].lastSyncAt = Date()
                         self.watchers[i].totalSynced += 1
-                        self.appState.syncWatchers[watcher.id] = self.watchers[i]
+                        self.appState.upsertSyncWatcher(self.watchers[i])
                     }
                     self.appState.notifications.sendSyncEvent(fileName: fileName, remotePath: remotePath)
+                }
+            }
+            await syncManager.setBookmarkStaleCallback { [weak self] watcher in
+                Task { @MainActor [weak self] in
+                    self?.appState.alertItem = AlertItem(
+                        title: "同步目录需要重新选择",
+                        message: "\(watcher.localPath) 的访问权限已失效，请重新添加同步规则。"
+                    )
                 }
             }
         }
@@ -131,6 +176,10 @@ extension SyncManager {
     func setCallback(_ callback: @Sendable @escaping (FileChangeEvent, SyncWatcher) -> Void) {
         onFileChange = callback
     }
+
+    func setBookmarkStaleCallback(_ callback: @Sendable @escaping (SyncWatcher) -> Void) {
+        onBookmarkStale = callback
+    }
 }
 
 // MARK: - RealtimeSyncView
@@ -139,6 +188,7 @@ struct RealtimeSyncView: View {
 
     // Add-sheet state
     @State private var localPath = ""
+    @State private var localPathBookmark: Data?
     @State private var remotePath = ""
     @State private var excludeText = SyncWatcher.defaultExcludePatterns.joined(separator: "\n")
 
@@ -238,6 +288,7 @@ struct RealtimeSyncView: View {
                     FileDropContainer { urls in
                         guard let url = urls.first else { return }
                         localPath = url.path
+                        localPathBookmark = nil
                     } content: {
                         TextField("拖入文件夹或点击选择", text: $localPath)
                             .textFieldStyle(.roundedBorder)
@@ -245,11 +296,23 @@ struct RealtimeSyncView: View {
                     Button("选择…") {
                         let p = NSOpenPanel()
                         p.canChooseFiles = false; p.canChooseDirectories = true
+                        p.canCreateDirectories = true
                         p.begin { response in
                             guard response == .OK else { return }
-                            localPath = p.url?.path ?? ""
+                            guard let url = p.url else { return }
+                            localPath = url.path
+                            localPathBookmark = try? url.bookmarkData(
+                                options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+                                includingResourceValuesForKeys: nil,
+                                relativeTo: nil
+                            )
                         }
                     }
+                }
+                if !localPath.isEmpty && localPathBookmark == nil {
+                    Text("请点击“选择…”授予沙盒访问权限；拖入或手动输入的路径不能在重启后稳定监控。")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
                 }
             }
 
@@ -284,11 +347,17 @@ struct RealtimeSyncView: View {
                     let patterns = excludeText.split(separator: "\n")
                         .map { $0.trimmingCharacters(in: .whitespaces) }
                         .filter { !$0.isEmpty }
-                    vm.addWatcher(localPath: localPath, remotePath: remotePath, excludePatterns: patterns)
+                    guard let localPathBookmark else { return }
+                    vm.addWatcher(
+                        localPath: localPath,
+                        localPathBookmark: localPathBookmark,
+                        remotePath: remotePath,
+                        excludePatterns: patterns
+                    )
                     vm.showAddSheet = false
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(localPath.isEmpty || remotePath.isEmpty)
+                .disabled(localPath.isEmpty || localPathBookmark == nil || remotePath.isEmpty)
             }
         }
         .padding(24)
