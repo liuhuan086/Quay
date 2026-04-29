@@ -55,7 +55,11 @@ final class LocalFileVM: ObservableObject {
 
     func refresh() { load(currentPath) }
 
-    func openInFinder() { NSWorkspace.shared.open(URL(fileURLWithPath: currentPath)) }
+    func openInFinder() {
+        // FIXME(AppSandbox): only open folders the user selected or restored
+        // through a security-scoped bookmark.
+        NSWorkspace.shared.open(URL(fileURLWithPath: currentPath))
+    }
 
     private func load(_ path: String) {
         let fm = FileManager.default

@@ -35,6 +35,8 @@ public final class FSEventWatcher: @unchecked Sendable {
 
     // MARK: - Start
     public func startWatching(paths: [String]) {
+        // FIXME(AppSandbox): each watched path must come from a security-scoped
+        // bookmark before this is used in the Mac App Store sandbox.
         stopWatching()
         guard !paths.isEmpty else { return }
 
