@@ -590,19 +590,18 @@ struct LocalFileList: View {
         .contextMenu(forSelectionType: UUID.self) { ids in
             let items = selectedItems(for: ids)
             if let item = items.first {
-                if item.isDirectory {
-                    Button("打开文件夹") { vm.enter(item) }
-                } else {
-                    Button("打开文件") {
-                        NSWorkspace.shared.open(item.url)
-                    }
-                }
-                Divider()
                 Button("上传") { onUpload(items) }
-                Divider()
                 if items.count == 1 {
+                    if item.isDirectory {
+                        Button("打开文件夹") { vm.enter(item) }
+                    } else {
+                        Button("打开文件") {
+                            NSWorkspace.shared.open(item.url)
+                        }
+                    }
                     Button("重命名") { onRename(item) }
                 }
+                Divider()
                 Button("删除", role: .destructive) { onDelete(items) }
             }
         } primaryAction: { ids in
