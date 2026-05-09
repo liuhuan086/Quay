@@ -9,10 +9,10 @@
 ## 使用方式
 
 ```
-1. 在 Claude Code 里 cd 到项目根 /Users/liuhuan/Documents/SwiftFTPClaude
+1. 在 Claude Code 里 cd 到项目根 /Users/huan/Documents/swiftFTP
 2. 按本文件顺序复制下面的 ⌘ Prompt 到对话框
 3. 每完成一条，本地 git commit；commit 完跑 ⌘U 单测
-4. 全部 Phase 1 完成后再做沙盒切换最终验证
+4. Phase 1 剩余项完成后做 Release 签名包、沙盒文件访问、StoreKit Sandbox 的最终验证
 ```
 
 ---
@@ -21,73 +21,45 @@
 
 ## P1-01 把密码迁移到 Keychain
 
+> 状态（2026-05-09）：✅ 已完成。`ServerConfig.password` 已是运行时字段，`ServerRepository` 已读写 Keychain 并迁移旧 JSON 明文密码，`TransferTask.serverPassword` 不存在，相关 Keychain/Repository 单测已覆盖。
+
 ```
-我们要把 SwiftFTP 的密码存储从 UserDefaults 迁移到 macOS Keychain，原因见
-Docs/AppStore_Readiness.md §3.1 S1。
-
-现状：
-- ServerConfig.password: String 是 Codable 字段，整体 JSON 写进 UserDefaults
-- TransferTask.serverPassword 也是 String，跟着任务持久化
-- KeychainManager.swift 已实现但无人引用（死代码）
-- TransferQueueView.swift:215 的设置文案还公开声称"不使用 钥匙串"
-
-请：
-1. 把 ServerConfig.password 改成不参与 Codable 的瞬态字段（用 CodingKeys 排除，
-   或拆成 ServerConfig（持久）+ ServerCredential（运行时）两个结构体）
-2. 在 ServerRepository.save / fetchAll 时通过 KeychainManager 读写密码，
-   account = serverID.uuidString，service 沿用 com.swiftftp.app
-3. 删除 TransferTask.serverPassword，TransferEngine.executeTask 里改成
-   通过 task.serverID 现取密码（或在 enqueue 时把密码放进 actor 内的字典）
-4. 写一个一次性迁移：检测到老 UserDefaults JSON 里有非空 password 时，
-   写到 Keychain 后清空字段并回写
-5. 修改 SettingsRootView 的安全页文案，改成"密码安全保存在 macOS 钥匙串中"
-6. 跑 KeychainTests / ServerRepositoryTests，确保不回归
-7. 输出迁移逻辑要写一个单测：构造老格式 JSON → fetchAll → 验证 Keychain 里有
-
-不要破坏现有 SSH 私钥 passphrase 与密码共用 password 字段的行为；
-迁移时把它们一起迁。
+回归任务：
+1. 跑 `xcodebuild test`，确认 KeychainTests / ServerRepositoryTests 仍通过
+2. 手动验证：新建服务器保存密码 → 重启 → 连接；编辑为空密码 → Keychain 条目删除
+3. 确认导出的 JSON 不包含 `"password"` 或明文密码
 ```
 
 ---
 
 ## P1-02 SFTP TOFU 主机密钥校验
 
-```
-SFTPClient.swift:367 当前用 hostKeyValidator: .acceptAnything()，存在中间人攻击
-风险（Docs/AppStore_Readiness.md §3.1 S2）。同文件 :476 已经有
-KnownHostsManager 实现 TOFU 但没接进去。
+> 状态（2026-05-09）：✅ 基础 TOFU 已接入。`SFTPClient` 使用 `TOFUHostKeyValidator`，`KnownHostsManager` 会保存并校验 SHA-256 指纹；不一致会抛 `FTPError.hostKeyMismatch`。剩余增强是给用户一个“确认信任新指纹并重连”的 UI 流程。
 
+```
 请：
-1. 把 KnownHostsManager 接进 Citadel 的 hostKeyValidator
-   - 首次连接：记录 fingerprint（SHA-256），返回 accept
-   - 后续连接：fingerprint 一致 → accept；不一致 → 抛 FTPError.hostKeyMismatch
-2. 在 hostKeyMismatch 被抛出时，AppState.connect 捕获并展示
+1. 在 hostKeyMismatch 被抛出时，AppState.connect 捕获并展示
    一个"主机密钥变更，是否信任新密钥？"的确认弹窗（NSAlert 也行）
    - 用户确认后调用 KnownHostsManager.store(fingerprint:for:) 更新指纹再重连
    - 拒绝则保持失败
-3. KnownHostsManager 的 fileURL 在沙盒下会被重定向到容器内，确保
-   第一次写入时 createDirectory(withIntermediateDirectories: true) 工作
-4. 加测试：mock 一个 KnownHostsManager 协议，验证一致 / 不一致 / 首次 三种分支
-
-确认 Citadel 的 SSHHostKeyValidator API（Citadel 0.7.x），如有变化按实际签名实现。
+2. 补 UI/集成测试：首次连接、一致指纹、不一致指纹、用户确认更新四条路径
+3. 用真实 openssh-server 验证 known_hosts 文件在沙盒容器内可读写
 ```
 
 ---
 
 ## P1-03 FTPS 严格 TLS（默认严格 + 高级开关）
 
-```
-FTPClient.swift:43-46 用 sec_protocol_options_set_verify_block 直接 complete(true)，
-等于关闭 TLS 校验。需要：
+> 状态（2026-05-09）：🟡 部分完成。`allowSelfSignedTLS` 字段和 UI 开关已存在，默认路径不设置 verify block，走系统 TLS 校验；剩余问题是用户开启例外后目前会全部放行，MAS 前建议收窄为只放行自签/过期，不放行域名不匹配。
 
-1. ServerConfig 增加字段：var allowSelfSignedTLS: Bool = false
-2. FTPClient.connect 里：当 allowSelfSignedTLS == false（默认）时，
-   不设置 verify block，让系统走标准链校验
-3. 当用户勾选时，用 SecTrustEvaluateWithError 显式调用，遇错也只放行
+```
+需要：
+
+1. 当用户勾选 `allowSelfSignedTLS` 时，用 SecTrustEvaluateWithError 显式调用，遇错也只放行
    "证书过期 / 自签名" 这两类，不放行域名不匹配
-4. ServerEditView 的「高级」Tab 加一个开关：
-   "允许自签名 / 不受信证书（FTPS）"，默认关，旁边一个 (?) tooltip 说明风险
-5. 切换该字段时，立即在 testConnection() 里生效
+2. 保持默认路径不设置 verify block，让系统走标准链校验
+3. 切换该字段时，继续确保 testConnection() 立即生效
+4. 增加手动测试：有效证书、自签证书、过期证书、域名不匹配证书四类
 
 注意：Network.framework 的 sec_protocol_options 是 nw_protocol_options 衍生，
 不能简单 complete(true) 后再回到默认；改成只在用户允许时才设置 verify block。
@@ -97,134 +69,68 @@ FTPClient.swift:43-46 用 sec_protocol_options_set_verify_block 直接 complete(
 
 ## P1-04 启用 App Sandbox 与最小 entitlements
 
+> 状态（2026-05-09）：✅ entitlements 已启用 App Sandbox，并包含 network client、user-selected read/write、app-scope bookmarks。`project.yml` 已改为 Apple Development / CODE_SIGNING_REQUIRED=YES，`DEVELOPMENT_TEAM` 仍需用户填写。
+
 ```
-当前 Sources/Resources/SwiftFTP.entitlements 的 com.apple.security.app-sandbox = false。
-要切到 true 并保持现有功能可用。
-
 请：
-1. 修改 entitlements 为最小集：
-   - com.apple.security.app-sandbox = true
-   - com.apple.security.network.client = true
-   - com.apple.security.files.user-selected.read-write = true
-   - com.apple.security.files.bookmarks.app-scope = true
-   - 默认不要加 com.apple.security.files.downloads.read-write；只有确认需要固定写 Downloads 且能向审核说明时再加
-2. 修改 project.yml：
-   - CODE_SIGN_IDENTITY 改为 "Apple Development"
-   - CODE_SIGNING_REQUIRED = YES
-   - DEVELOPMENT_TEAM 留 TODO 由用户填
-3. 沙盒下会破坏的代码点要打 fix-it 注释：
-   - FSEventWatcher：监控的目录必须先有 security-scoped bookmark
-   - NSWorkspace.shared.open(item.url) ：只能开过 panel 选过的 URL
-   - KnownHostsManager.fileURL 写入 ~/Library/Application Support/SwiftFTP/
-     在沙盒下会自动重定向到容器内，验证写权限
-   - 拖入 ItemProvider 给的 URL：调用 startAccessingSecurityScopedResource()
-4. 跑一次 xcodebuild build，列出所有沙盒相关警告 / 错误
-5. 不要在这一步就解决所有问题，只做沙盒开启 + 编译通过；
-   FSEvents 的 bookmark 化放到 P1-05
-
-完成后让我看 git diff 与编译结果。
+1. 填写 `DEVELOPMENT_TEAM`
+2. 用 Apple Development 签名运行一次 Debug 包，手动验证本地文件浏览/打开/拖放上传/实时同步
+3. 用 Apple Distribution + MAS provisioning archive，确认 entitlements 在导出的 `.app` 内一致
+4. 保持最小 entitlements；不要添加 Downloads 权限，除非产品明确固定写 Downloads
 ```
 
 ---
 
 ## P1-05 FSEvents 监控 + 安全作用域书签
 
+> 状态（2026-05-09）：✅ 基础实现已完成。`SyncWatcher.localPathBookmark` 已持久化；添加规则必须通过选择器拿 security-scoped bookmark；`SyncManager.start` 会解析、startAccessing 并在 stopAll 配对释放；已有 bookmark round-trip 单测。
+
 ```
-沙盒开启后（P1-04），FSEventWatcher 监控用户外的目录会失败。需要把监控目录
-改成必须由用户通过 NSOpenPanel 选择，并把 URL 转成 security-scoped bookmark
-持久化。
-
-请：
-1. SyncWatcher 增加字段：var localPathBookmark: Data?
-   localPath 仍保留作为人类可读路径
-2. RealtimeSyncView 的 addSheet 里"选择…"按钮：
-   - NSOpenPanel.canCreateDirectories = true
-   - 选定后立即调 url.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess])
-   - 把 bookmark 写进 SyncWatcher，UserDefaults 持久化
-   - 拖入路径不能直接信任，必须用户再点"选择…"确认（沙盒下没有书签的拖入路径
-     无法稳定持续访问）
-3. SyncManager.start 里：
-   - 解析每个 watcher 的 bookmark 拿到 URL
-   - 调 startAccessingSecurityScopedResource()，记录引用计数
-   - 把 URL.path 给 FSEventWatcher.startWatching(paths:)
-   - stopAll 时配对 stopAccessingSecurityScopedResource
-4. 处理 bookmark stale（用户重命名了文件夹）的情况：
-   解析时检测 isStale → 弹窗提示用户重新选择
-5. 加测试：构造一个 bookmark → 解析 → 验证 path 一致
-
-跑完后手动验证一遍：在 ~/Desktop 建一个测试目录，加同步规则，
-碰文件 → 看是否能上传。
+剩余手动验证：
+1. 在 `~/Desktop` 建测试目录，通过“选择...”添加同步规则
+2. 修改文件，确认 FSEvents 触发上传
+3. 重启 App 后确认 bookmark 恢复监控
+4. 重命名/移动目录后确认 stale 提示可见
 ```
 
 ---
 
 ## P1-06 修菜单空动作 / 失效快捷键
 
+> 状态（2026-05-09）：✅ 已完成。`AppMenuCommands` 已接入 `AppState` 和闭包；新建连接、显示传输队列、导入/导出、显示隐藏文件都有实际动作。
+
 ```
-MainViews.swift:438-441 的 AppMenuCommands 里：
-  Button("新建连接…") {}
-  Button("显示传输队列") {}
-
-是空闭包占位，App Review 可重现。请：
-
-1. 把 AppMenuCommands 改成接受 AppState 与触发动作的 closure
-2. SwiftFTPApp 把 appState 注入 AppMenuCommands
-3. "新建连接…" → 触发 SidebarView 的 showAdd（用 NotificationCenter
-   或者把 showAdd 提升到 AppState.showAddSheet 然后绑定）
-4. "显示传输队列" → 触发 TransferBadgePopoverAnchor 的 popover 展开
-5. 顺手加几个常用项：
-   - 文件菜单：导入/导出服务器配置 JSON（已有 ServerRepository.exportJSON / importJSON）
-   - 视图菜单：⌘⇧L 切换显示隐藏文件（绑定到 @AppStorage showHidden）
-6. 验证 ⌘⇧N、⌘⇧T 在运行时确实弹出对应 UI
+回归任务：
+1. 运行 App，验证 ⌘⇧N 弹出新建连接
+2. 验证 ⌘⇧T 展开传输队列 popover
+3. 验证导入/导出 JSON 在沙盒签名包内可读写用户选择的位置
+4. 验证 ⌘⇧L 能切换本地/远端隐藏文件显示
 ```
 
 ---
 
 ## P1-07 SFTP 大文件流式上传
 
+> 状态（2026-05-09）：✅ 已完成。SFTP upload 使用 `FileHandle.read(upToCount:)` + 复用 `ByteBuffer` 分块写入，支持 offset；SFTP download 也已按 offset 续传，并在循环中检查取消。
+
 ```
-SFTPClient.swift:217 的 upload 函数：
-  let fileData = try Data(contentsOf: localURL)
-
-把整个文件读进内存，>500MB 必崩。请改成流式：
-
-1. 用 FileHandle(forReadingFrom: localURL) + read(upToCount: 32768) 循环
-2. 每读一块就 file.write(buffer, at: offset) 到 SFTP；
-   写完后 offset += chunk.count
-3. 进度回调按已写字节数计算
-4. defer 关掉文件句柄；任何抛错都要保证句柄关闭
-5. 同步增加 ContentRange 风格的断点续传（如果 Citadel 支持，
-   .write + 指定 offset）—— 把 supportsResume 改成 true
-6. 加一个集成测试（可选）：本机起 sshd / 用 Docker linuxserver/openssh-server
+剩余验证：
+1. 本机起 sshd / 用 Docker linuxserver/openssh-server
    传 1GB 文件验证内存峰值 < 100MB
-
-注意 Citadel 的 SFTPFile.write API 接受 ByteBuffer，需要 ByteBuffer(data:)
-包装；不要每个 chunk 都重新分配大 buffer，复用同一个 var buffer。
+2. 手动验证上传/下载暂停后恢复，确认远端/本地文件内容一致
 ```
 
 ---
 
 ## P1-08 修死开关：verifyMD5 + maxConcurrent 启动加载
 
+> 状态（2026-05-09）：✅ 可见设置项已接线。`verifyMD5` 死开关已不存在；`AppState.init` 会应用 `maxConcurrent`；`showHidden` 和 `debounce` 已接到对应 VM / watcher。
+
 ```
-TransferQueueView.swift:195 的 @AppStorage("verifyMD5") 没有任何代码读它。
-TransferQueueView.swift:192 的 maxConcurrent 启动时不会同步到 TransferEngine。
-
-请：
-1. AppState.init 末尾：
-   let n = UserDefaults.standard.integer(forKey: "maxConcurrent")
-   Task { await engine.updateConcurrent(n > 0 ? n : 3) }
-2. 实现 verifyMD5：
-   - TransferTask 增加 expectedMD5: String? 与 verifyMD5: Bool
-   - 上传：传完后调用一次 SITE / SFTP 服务器端 hash（FTP 没标准命令，
-     可省略；SFTP 通过 sftp.openssh-com 的 check-file 扩展 —— 多数服务器
-     不支持）
-   - 现实选择：MD5 校验在 FTP/SFTP 协议层支持差，建议**移除这个开关**，
-     避免误导。我倾向移除，请直接删 verifyMD5 开关与 @AppStorage 字段
-3. 把 showHidden 接进 LocalFileVM / RemoteFileVM 的 sortedItems 过滤
-4. 把 debounce 接进 FSEventWatcher 的防抖延迟
-
-完成后 Settings 里所有可见开关都必须真生效，否则就删除。
+回归任务：
+1. 设置最大并发为 1/3/8，重启后确认 TransferEngine 生效
+2. 切换显示隐藏文件，确认本地和远端列表同时变化
+3. 调整同步防抖延迟，确认 FSEvents 使用新的 UserDefaults 值
 ```
 
 ---
@@ -249,70 +155,41 @@ TransferQueueView.swift:192 的 maxConcurrent 启动时不会同步到 TransferE
 
 ## P1-10 首次启动引导（Onboarding）
 
+> 状态（2026-05-09）：✅ 已完成。`AppState.hasSeenOnboarding`、`OnboardingView` 和 Settings 里的“重新观看引导”已存在。
+
 ```
-评审员 30 秒内看不到价值就拒。当前启动后只有空 sidebar + WelcomeView，
-门槛高。加个 3 步引导：
-
-1. AppState 增加 @AppStorage("hasSeenOnboarding") + 对应 @Published
-2. 新建 Sources/Features/Onboarding/OnboardingView.swift：
-   - Step 1 - 欢迎：logo + slogan "极简、安全、Swift 原生的 SFTP 客户端"
-   - Step 2 - 演示新建连接：截图或 Lottie 演示从 + 按钮到表单
-   - Step 3 - 演示拖拽上传 + 实时同步：动图或视频
-   - 底部有 ←/→ 按钮 + 跳过
-3. RootView 在 hasSeenOnboarding == false 时全屏覆盖 Onboarding
-4. 完成最后一步设置 hasSeenOnboarding = true
-5. Settings 加一个"重新观看引导"按钮以便复测
-
-视觉风格参考 Things 3 / Bear，不要用太多动画；纯静态截图 + 标题 + 副标题
-即可。截图先放占位 SF Symbols，等真截图出来再替换。
+回归任务：
+1. 清空 `hasSeenOnboarding`，确认首次启动展示 Onboarding
+2. 完成/跳过后确认不再弹出
+3. Settings 点击“重新观看引导”后确认可复测
+4. MAS 截图前把占位视觉复核成最终素材
 ```
 
 ---
 
 ## P1-11 About 面板 + 第三方致谢
 
-```
-Citadel 是 BSD-2-Clause，必须在 About 里署名。当前没有 About 面板。请：
+> 状态（2026-05-09）：✅ 基础完成。`AboutView`、`Acknowledgements.json` 和 App 菜单入口已存在；仍需补真实官网/隐私政策/用户协议 URL。
 
-1. 新建 Sources/Features/About/AboutView.swift：
-   - logo + App 名 + 版本（CFBundleShortVersionString + Build）
-   - "关于 SwiftFTP" 一段简介
-   - 链接：官网 / 隐私政策 / 用户协议（先放占位 URL）
-   - 致谢按钮 → 弹一个 sheet 列出：
-     - Citadel (BSD-2-Clause) © Joannis Orlandos
-     - SwiftNIO (Apache 2.0) © Apple Inc.
-     - Crypto / NIOSSH 等
-2. 在 AppMenuCommands 里替换默认 About 项，调用 NSApp.orderFrontStandardAboutPanel
-   或者用 SwiftUI 自定义 sheet
-3. 自动从 SPM Package.resolved 提取依赖列表写进 Bundle 资源（也可以手写一个
-   acknowledgements.json）
-4. 文案中文为主，第三方许可保留英文原文
+```
+回归任务：
+1. 运行 App，打开“关于 SwiftFTP”，确认版本/build、致谢列表和链接显示正常
+2. 把官网 / 隐私政策 / 用户协议替换成公开 HTTPS URL
+3. 对照 `Package.resolved` 复核致谢列表是否包含 Citadel、SwiftNIO、Crypto、NIOSSH 等主要依赖
 ```
 
 ---
 
 ## P1-12 StoreKit 2 + IAP 解锁（如果选 MAS）
 
+> 状态（2026-05-09）：🟡 基础完成。`StoreManager`、购买/恢复 UI、试用状态和 Pro 功能限制已存在；剩余是 StoreKit config / Sandbox tester 的真实购买恢复验证。
+
 ```
-如果走 MAS 路径，需要 IAP 实现"免费下载 → IAP 解锁完整版"，否则没法做试用。
-
-商业模型：
-- 免费版：1 个服务器 / 关闭实时同步 / 关闭多并发
-- Pro 版（IAP $4.99 一次性）：无限服务器 + 实时同步 + 多并发
-- 不做订阅（工具类用户讨厌订阅）
-
 请：
-1. 新建 Sources/Core/Billing/StoreManager.swift：
-   - actor StoreManager
-   - 加载 productID = "com.swiftftp.app.pro"
-   - 监听 Transaction.updates
-   - 暴露 @MainActor @Published var isPro: Bool
-2. AppState 持有 StoreManager；isPro = false 时：
-   - SidebarView 添加新连接前检查 servers.count < 1 || appState.isPro
-   - RealtimeSyncView 整体在 !isPro 时显示"升级到 Pro 解锁"占位
-3. SettingsRootView 加"购买 / 恢复购买"页签
-4. 提交 ASC 时配置 IAP 产品（Non-Consumable, $4.99 / Tier 5）
-5. 评审账号：开发者账号下创建 Sandbox tester，文档里准备试玩流程
+1. 提交 ASC 前配置 IAP 产品（Non-Consumable, `com.swiftftp.app.pro`，$4.99 / Tier 5）
+2. 创建 Sandbox tester，跑通购买、恢复、取消、pending、失败态
+3. 准备 App Review 说明：试用/购买入口、评审账号、如何验证 Pro 解锁
+4. 复核免费/试用结束状态：不能产生 App Review 认为“功能不可用且无清晰购买路径”的体验
 
 不要尝试做收据本地校验绕过——MAS 内购走 StoreKit 2 的 Transaction.verify
 就够了，苹果会处理。
@@ -365,28 +242,24 @@ FileBrowserView 当前只能从本地 → 远端拖拽上传。加远端 → 本
 请按 SwiftUI 标准做法重构，不要引入第三方本地化库。
 ```
 
-## P2-04 FTP Active 模式 + SFTP 续传 + Proxy
+## P2-04 FTP Active 模式 + Proxy
 
-合并到一个 PR，因为这三个改动都在 Network 层。
+合并到一个 PR，因为两个改动都在 Network 层。SFTP upload/download 断点续传已完成，保留为回归测试项。
 
 ```
-请按以下三个独立任务依次实现：
+请按以下两个独立任务依次实现：
 
 任务 A：FTP Active 模式
 - ServerConfig 加 dataMode: enum { passive, active }
 - FTPClient 增加 openPORT()：监听一个本地端口，给服务器发 PORT 命令
   注意客户端公网 IP 获取与 NAT 穿透——简单实现先在直连场景跑通
 
-任务 B：SFTP 断点续传
-- SFTPClient.supportsResume = true
-- upload(offset:) 用 file.write(buffer, at: offset) 从中间写
-- download(offset:) 用 file.read(from: offset, length:) 从中间读
-
-任务 C：HTTP / SOCKS5 代理
+任务 B：HTTP / SOCKS5 代理
 - ServerConfig 加 proxyConfig: ProxyConfig?
 - FTPClient 用 NWParameters.tcp + setProxyConfiguration
 - SFTPClient 通过 NIO 自定义 ChannelHandler 注入代理握手
 
+回归：保留 SFTP upload/download offset 续传测试，防止 Network 层改动破坏暂停/恢复。
 每个任务一个 commit，互不依赖。
 ```
 

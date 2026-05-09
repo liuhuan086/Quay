@@ -77,9 +77,10 @@ ditto -c -k --keepParent \
   build/SwiftFTP_v2.0.0.zip
 ```
 
-## 本次构建中的非阻断警告
+## 当前验证备注
 
-- `AppState.swift`: `var task` 可以改为 `let task`
-- `FTPClient.swift`: `var captured` 可以改为 `let captured`
-- `FSEventWatcher.swift`: `FSEventStreamScheduleWithRunLoop` 在 macOS 13.0 后 deprecated
-- `SFTPClient.swift`: Citadel 相关类型触发 Swift 6 `Sendable` 警告
+- Debug build 已可用 `xcodebuild build ... CODE_SIGNING_ALLOWED=NO` 通过。
+- 单测已可用 `xcodebuild test ... CODE_SIGNING_ALLOWED=NO` 通过，当前 47 tests。
+- 若命令行环境无法写入默认 Xcode 缓存，可加：
+  `-derivedDataPath /private/tmp/SwiftFTPDerivedData -clonedSourcePackagesDirPath /private/tmp/SwiftFTPSourcePackages`
+- Release / App Store 包仍需要配置 `DEVELOPMENT_TEAM`、Distribution 证书和 MAS provisioning profile。

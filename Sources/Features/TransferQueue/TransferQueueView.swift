@@ -80,11 +80,16 @@ struct TransferRow: View {
                 ProgressView(value: p).progressViewStyle(.linear).tint(.blue)
             case .completed:
                 ProgressView(value: 1.0).progressViewStyle(.linear).tint(.green)
-            case .paused:
-                ProgressView(value: task.status.progressFraction).progressViewStyle(.linear).tint(.orange)
+            case .paused(let offset):
+                ProgressView(value: pausedProgress(offset: offset)).progressViewStyle(.linear).tint(.orange)
             default: EmptyView()
             }
         }
+    }
+
+    private func pausedProgress(offset: Int64) -> Double {
+        guard task.fileSize > 0 else { return 0 }
+        return min(1.0, max(0.0, Double(offset) / Double(task.fileSize)))
     }
 
     @ViewBuilder var statusLabel: some View {

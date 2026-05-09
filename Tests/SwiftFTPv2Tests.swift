@@ -347,7 +347,7 @@ final class SyncWatcherBookmarkTests: XCTestCase {
             bookmarkDataIsStale: &stale
         )
         XCTAssertFalse(stale)
-        XCTAssertEqual(resolved.path, directory.path)
+        XCTAssertEqual(resolved.standardizedFileURL.path, directory.standardizedFileURL.path)
     }
 }
 

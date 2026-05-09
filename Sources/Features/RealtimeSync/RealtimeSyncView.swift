@@ -70,12 +70,25 @@ actor SyncManager {
 
     private func dispatch(event: FileChangeEvent, watchers: [SyncWatcher]) {
         guard event.kind != .deleted, !event.isDirectory else { return }
-        for w in watchers where event.path.hasPrefix(w.localPath) {
+        for w in watchers where isPath(event.path, containedIn: w.localPath) {
             let matcher = ExclusionMatcher(patterns: w.excludePatterns)
             if !matcher.shouldExclude(event.path) {
                 onFileChange?(event, w)
             }
         }
+    }
+
+    private func isPath(_ path: String, containedIn rootPath: String) -> Bool {
+        let root = normalizedPath(rootPath)
+        let candidate = normalizedPath(path)
+        guard root != "/" else { return true }
+        return candidate == root || candidate.hasPrefix(root + "/")
+    }
+
+    private func normalizedPath(_ path: String) -> String {
+        let normalized = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard normalized != "/" else { return normalized }
+        return normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 }
 

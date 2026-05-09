@@ -27,7 +27,11 @@ public final class FSEventWatcher: @unchecked Sendable {
     private let debounceQueue = DispatchQueue(label: "com.swiftftp.fsevents", qos: .utility)
     private let fixedDebounceDelay: TimeInterval?
     private let lock = NSLock()
-    private var pendingWork: [String: DispatchWorkItem] = [:]
+    private struct PendingDebounce {
+        let id: UUID
+        let work: DispatchWorkItem
+    }
+    private var pendingWork: [String: PendingDebounce] = [:]
 
     public init(debounceDelay: TimeInterval? = nil) {
         self.fixedDebounceDelay = debounceDelay
@@ -44,7 +48,7 @@ public final class FSEventWatcher: @unchecked Sendable {
         // so we use `@unchecked Sendable` + manual retain/release to bridge safely.
         var ctx = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passRetained(self).toOpaque(),
+            info: Unmanaged.passUnretained(self).toOpaque(),
             retain: { ptr -> UnsafeRawPointer? in
                 _ = Unmanaged<FSEventWatcher>.fromOpaque(ptr!).retain()
                 return ptr
@@ -92,7 +96,7 @@ public final class FSEventWatcher: @unchecked Sendable {
             streamRef = nil
         }
         lock.lock()
-        pendingWork.values.forEach { $0.cancel() }
+        pendingWork.values.forEach { $0.work.cancel() }
         pendingWork.removeAll()
         lock.unlock()
     }
@@ -101,7 +105,8 @@ public final class FSEventWatcher: @unchecked Sendable {
     private func handleRaw(path: String, flags: FSEventStreamEventFlags) {
         // Debounce per path
         lock.lock()
-        pendingWork[path]?.cancel()
+        pendingWork[path]?.work.cancel()
+        let id = UUID()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             let isDir  = flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0
@@ -111,8 +116,13 @@ public final class FSEventWatcher: @unchecked Sendable {
             else if flags & UInt32(kFSEventStreamEventFlagItemRenamed) != 0 { kind = .renamed }
             let event = FileChangeEvent(path: path, kind: kind, isDirectory: isDir)
             self.eventPublisher.send(event)
+            self.lock.lock()
+            if self.pendingWork[path]?.id == id {
+                self.pendingWork.removeValue(forKey: path)
+            }
+            self.lock.unlock()
         }
-        pendingWork[path] = work
+        pendingWork[path] = PendingDebounce(id: id, work: work)
         lock.unlock()
         debounceQueue.asyncAfter(deadline: .now() + effectiveDebounceDelay, execute: work)
     }

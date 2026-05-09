@@ -2,16 +2,16 @@
 
 **审阅人视角**：iOS/macOS 应用架构师 + App Review 经验 + 独立开发者商业化角度
 **版本**：v2.0.0（构建产物：`build/SwiftFTP_v2.0.0.dmg`）
-**评估日期**：2026-04-29
-**仓库规模**：4,496 行 Swift（含约 350 行单测） / 10 次提交 / 单人开发
+**评估日期**：2026-05-09（已同步当前代码状态）
+**仓库规模**：约 5k 行 Swift（含 47 个单测） / 单人开发
 
 ---
 
 ## 0. 一句话结论
 
-**可以做成「小而美」的付费 FTP/SFTP 客户端，但当前版本不能上架 Mac App Store。** 距离 MAS 审核通过至少还有 **3–5 周**集中工作量，主要卡点不是功能而是**安全合规、沙盒化、签名/公证、密码存储、上架物料**。
+**可以做成「小而美」的付费 FTP/SFTP 客户端，当前代码已经补上了一批早期阻断项：App Sandbox、Keychain 密码存储、SFTP TOFU、StoreKit 2 基础付费、首次引导、About/致谢、SFTP 流式上传与续传。** 距离 MAS 审核通过仍建议预留 **1–2 周** 集中收尾，主要卡点变成**发布签名/ASC 物料、真实协议集成测试、沙盒文件访问边界、FTPS 证书例外策略细化**。
 
-如果只走 **Developer ID + DMG 直售**（绕开 MAS），距离能卖大约 **1–2 周**。
+如果只走 **Developer ID + DMG 直售**（绕开 MAS），当前功能已经接近可打包试卖，仍需要公证、Sparkle/更新策略、隐私政策和真实服务器冒烟验证。
 
 ---
 
@@ -29,9 +29,8 @@
 - 单窗口单服务器，**不能同时打开多个服务器并排操作**——Transmit / ForkLift 都支持；这是这类工具的高频诉求。
 - 没有从远端「拖出到 Finder」的反向拖拽；只有拖入。
 - 只有 PASV，没有 Active 模式；公司/校园网常需要切换。
-- 菜单项 `新建连接…` / `显示传输队列` 是占位空闭包（`MainViews.swift:438`），不响应快捷键。
 - 没有「最近连接」/ 收藏 / 快速连接 URL。
-- Settings 安全页直白写「不使用 macOS 钥匙串」，这是审核与口碑双重负面信号（详见 §4）。
+- 菜单与安全页早期问题已修复：命令菜单有实际动作，密码说明已改为 Keychain。
 
 ### 1.2 竞品定位
 
@@ -71,27 +70,26 @@
 | `actor ConnectionPool` + 借/还语义 + waiter 队列 | `ConnectionPool.swift` | 处理 actor reentrancy 的注释清晰，工程质量高 |
 | 错误友好化映射 `FTPError.friendly()` | `AnyFTPClient.swift:107` | 把 NWError / POSIX / NIO / Cocoa 错误统一中文化，体验比绝大多数 FTP 软件好 |
 | FSEvents + 排除规则（节点/git/build 等） | `FSEventWatcher.swift`、`Entities.swift:249` | 实时同步默认排除得体 |
+| Keychain-backed credential storage | `ServerRepository.swift`、`KeychainManager.swift` | `ServerConfig.password` 是运行时字段，编码时不落盘，支持旧 JSON 明文迁移 |
+| SFTP TOFU host-key 校验 | `SFTPClient.swift`、`KnownHostsManager` | 首次信任后保存 SHA-256 指纹，后续不一致会抛 `hostKeyMismatch` |
+| SFTP/FTP 可取消传输与 SFTP 续传 | `SFTPClient.swift`、`FTPClient.swift`、`TransferEngine.swift` | 大文件流式读写，暂停/取消更及时，SFTP download 已按 offset 恢复 |
 
 ### 2.2 重大技术风险（必须修，影响上架或体验）
 
 | # | 问题 | 文件 | 严重度 |
 |---|------|------|-------|
-| T1 | **SFTP 上传将整个文件读入内存**：`let fileData = try Data(contentsOf: localURL)` | `SFTPClient.swift:217` | 🔴 大文件 OOM、审核可重现的崩溃 |
-| T2 | **菜单空动作**：`Button("新建连接…") {}` / `Button("显示传输队列") {}` | `MainViews.swift:438-441` | 🟡 审核会被发现"功能项无响应"；快捷键 ⌘⇧N / ⌘⇧T 失效 |
-| T3 | **设置项 `verifyMD5` 没接到引擎**：仅写入 `@AppStorage`，无逻辑 | `TransferQueueView.swift:195` | 🟡 误导用户 |
-| T4 | **`FSEventStreamScheduleWithRunLoop` 在 macOS 13+ 已 deprecated** | `FSEventWatcher.swift` | 🟡 警告，需迁移到 dispatch 调度 |
-| T5 | 单窗口架构：`WindowGroup { RootView }` 没有 `WindowGroup(for: ServerID.self)` 多窗口路由 | `MainViews.swift:14` | 🟡 影响产品力，不影响审核 |
-| T6 | FTP 仅支持 PASV，没有 Active 模式 | `FTPClient.swift:301` | 🟡 部分企业网无法连接 |
-| T7 | SFTP 不支持断点续传（`supportsResume = false`） | `SFTPClient.swift:35` | 🟢 FTP 已支持，可作 v2.1 卖点 |
-| T8 | 重命名/复制路径拼接没有处理结尾斜杠的边界（如 root `/`） | 多处 | 🟢 |
-| T9 | Settings UI 改的 `maxConcurrent` 通过 `Task { await engine.updateConcurrent }` 改 actor，但启动时 engine 默认 3，未读取 `@AppStorage` 初值 | `AppState.swift:42` / `TransferEngine.swift:9` | 🟡 重启后生效问题 |
-| T10 | `connect/disconnect` 切换时未清空 `lastCompletedTransferServerID`，可能多次触发 watcher | `AppState.swift:127` | 🟢 |
+| T1 | FTP 控制通道只读单行响应，严格 FTP 多行响应（如 `220-...` / `211-...`）兼容性不足 | `FTPClient.swift` | 🟡 部分服务器欢迎语/特性响应可能解析异常 |
+| T2 | FTP 仅支持 PASV，没有 Active 模式 | `FTPClient.swift` | 🟡 部分企业网/老服务器无法连接 |
+| T3 | 单窗口架构：`WindowGroup { RootView }` 没有多服务器多窗口路由 | `MainViews.swift` | 🟡 影响产品力，不影响审核 |
+| T4 | 真实 FTP/SFTP 端到端测试缺失 | `Tests/` | 🟡 当前单测覆盖值类型/仓储/Keychain，缺少协议级回归网 |
+| T5 | 本地文件打开/拖入上传在沙盒下仍有 TODO：需逐个验证 `startAccessingSecurityScopedResource()` 覆盖面 | `FileBrowserView.swift`、`FileViewModels.swift` | 🟡 MAS 审核前必须手测 |
+| T6 | FTPS 的「允许不受信证书」开关目前是用户显式放行后全部信任，缺少按错误类型细分 | `FTPClient.swift` | 🟡 默认安全，例外模式仍应更窄 |
 
 ### 2.3 测试覆盖
 
-- 7 个测试类，覆盖 `Entities` / `TransferTask` / `Keychain` / `Repository` / `ExclusionMatcher` / `FTPError` / `ContinuationBox` / `ConnectionPool`。
-- **缺失**：FTPClient 协议解析（MLSD/LIST/PASV）单测、TransferEngine 状态机测试、UI 测试、端到端测试（推荐用 Docker pure-ftpd + sshd 起本地服务器跑集成测）。
-- 测试规模偏小（约 350 行 vs 4500 行业务代码），**App Review 不会因此拒，但卖出去后维护成本高**。
+- 现有 47 个单测，覆盖 `Entities` / `TransferTask` / `Keychain` / `Repository` / `ExclusionMatcher` / `FTPError` / `KnownHostsManager` / `ContinuationBox` / `ConnectionPool` / security-scoped bookmark 基础回归。
+- **缺失**：FTPClient 协议解析（MLSD/LIST/PASV/多行响应）单测、TransferEngine 状态机测试、UI 测试、真实 FTP/SFTP 端到端测试（推荐用 Docker pure-ftpd + openssh-server 起本地服务器跑集成测）。
+- 验证命令：`xcodebuild test -project SwiftFTP.xcodeproj -scheme SwiftFTP -destination 'platform=macOS' -derivedDataPath /private/tmp/SwiftFTPDerivedData -clonedSourcePackagesDirPath /private/tmp/SwiftFTPSourcePackages CODE_SIGNING_ALLOWED=NO`，当前 47 tests 通过。
 
 ---
 
@@ -99,47 +97,42 @@
 
 ### 3.1 🔴 阻断级安全问题（必须修，否则审核必拒或被苹果下架）
 
-#### S1. 密码以明文存进 `UserDefaults`
-- **现状**：`ServerConfig.password: String` 是普通字段，与其它字段一起 JSON 编码进 `UserDefaults`（`ServerRepository.swift:42`）。`TransferTask` 还把密码再次复制一份带进队列（`Entities.swift:194`，`serverPassword`）。
-- **`KeychainManager.swift` 已经写好但没被任何代码引用**——是死代码。
-- **设置页面甚至公开声明**：「密码保存在本地客户端中，不使用 macOS 钥匙串」（`TransferQueueView.swift:215`）。
-- **后果**：
-  - App Review **大概率以 Guideline 5.1.1 (Privacy → Data Collection and Storage)** 拒绝；
-  - 任何能读 `~/Library/Containers/com.swiftftp.app/Data/Library/Preferences/` 或 `~/Library/Preferences/` 的进程都能拿到所有 FTP 密码；
-  - 备份到 iCloud/TimeMachine 也会泄露；
-  - 一旦曝光是 PR 灾难。
-- **必须做**：把密码走 Keychain（已有 `KeychainManager`），`ServerConfig.password` 改成 transient 不持久化字段，传输任务通过 `serverID` 临时取密码而不是复制。
+#### S1. 密码存储：已改为 Keychain
+- `ServerConfig.password` 保留为运行时字段，`encode(to:)` 不写出 `password`。
+- `ServerRepository.fetchAll()` 会读取 Keychain，并迁移旧 UserDefaults JSON 中的明文密码后回写清理。
+- `TransferTask` 不再携带 `serverPassword`，`TransferEngine` 通过 `serverID` 临时读取 Keychain。
+- 状态：✅ 已完成；仍需在 Release build 中手动验证首次保存/编辑/清空密码流程。
 
-#### S2. SFTP 接受**任意 host key**（中间人攻击隐患）
-- `SFTPClient.swift:367`：`hostKeyValidator: .acceptAnything()`。
-- `KnownHostsManager` 写好了 TOFU（信任首次连接）逻辑（`SFTPClient.swift:476`），但**也没被引用**——同样是死代码。
-- **必须做**：实现 TOFU 校验：首次连接记录指纹；后续连接对比，不一致时弹窗强制确认（参考 OpenSSH `~/.ssh/known_hosts` 的行为）。
+#### S2. SFTP host-key TOFU：已接入
+- `SFTPClient` 使用 `TOFUHostKeyValidator` + `KnownHostsManager`。
+- 首次连接记录 SHA-256 指纹；后续不一致抛 `FTPError.hostKeyMismatch`。
+- 状态：✅ 基础安全模型已完成；下一步可补“用户确认后更新指纹再重连”的 UI 流程。
 
-#### S3. FTPS 接受**任意 TLS 证书**
-- `FTPClient.swift:43-46`：`{ _, _, complete in complete(true) }` —— 注释甚至自己写了「allow self-signed for now」。
-- **后果**：无法防御 MITM。审核可能不直接拒，但属于明显安全瑕疵。
-- **必须做**：默认严格校验；仅当用户在「高级」中明确勾选「允许自签名证书」时放行（带警告 UI）。
+#### S3. FTPS TLS：默认严格，例外模式需收窄
+- 默认不设置 verify block，走系统标准证书链校验。
+- 用户显式开启 `allowSelfSignedTLS` 时会放行不受信证书，用于内网/自签服务器。
+- 状态：🟡 默认安全已完成；MAS 前建议把例外模式从“全部放行”收窄到只放行自签/过期，不放行域名不匹配。
 
 ### 3.2 🟡 中风险
 
 | # | 问题 | 修复 |
 |---|------|------|
-| S4 | 实时同步在沙盒下需要**安全作用域书签**（security-scoped bookmark）才能持续读取用户外的目录，当前没有持久化书签 | 用 `URL.bookmarkData(options: [.withSecurityScope])` 保存到 Keychain/Defaults |
+| S4 | 本地文件浏览/拖放上传仍需完整沙盒手测，确保所有打开/读取路径都来自用户选择或 security-scoped URL | 补 `startAccessingSecurityScopedResource()` 覆盖面和手测清单 |
 | S5 | 私钥 passphrase 直接复用 `password` 字段，UI 上没区分密码与 passphrase，混用容易误存 | `ServerEditView` 已有"密钥密码"独立 placeholder，但底层仍是同一个 `password` 字段 |
-| S6 | 没有任何隐私政策 / EULA / 第三方许可声明（Citadel 是 BSD-2，需要在「关于」中署名） | 加 About 面板与隐私政策 URL |
+| S6 | About/致谢已有基础实现，但公开隐私政策 URL 仍缺 | MAS 提交前补公开 HTTPS 隐私政策 |
 | S7 | `NotificationService.send` 在 `notDetermined` 时即时申请权限——首次运行就弹，且未做 `usageDescription` 文案 | 改为延迟到首个传输完成时再请求 |
 
 ### 3.3 沙盒 (App Sandbox)
 
-**当前**：`SwiftFTP.entitlements:6` —— `<key>com.apple.security.app-sandbox</key><false/>`。
+**当前**：`Sources/Resources/SwiftFTP.entitlements` 已启用 App Sandbox，并包含 network client、user-selected read/write、app-scope bookmarks。
 
-**这是 MAS 上架 #1 阻断**——MAS 强制要求沙盒。`com.apple.security.app-sandbox` 必须为 `true`，否则 `submit to App Store Connect` 会直接报错。
+MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；当前开发构建使用 `CODE_SIGNING_ALLOWED=NO` 可通过 Debug build/test，但不等同于可提交包。
 
 切到沙盒后会破坏的现有功能：
-- ✋ FSEventWatcher 监控用户外的目录 → 必须用 `NSOpenPanel` 拿到 URL 再保存 security-scoped bookmark；
+- ✅ FSEventWatcher 监控用户外的目录 → 已通过 `NSOpenPanel` 保存 security-scoped bookmark；
 - ✋ `NSWorkspace.shared.open(item.url)` 打开任意路径 → 沙盒下只能开通过 panel 选过的、有书签的；
 - ✋ 拖入文件 → ItemProvider 给的是 sandbox-friendly 的临时 URL，需要 `startAccessingSecurityScopedResource()`；
-- ✋ 写到 `~/Library/Application Support/SwiftFTP/known_hosts.json` → 沙盒下重定向到 `~/Library/Containers/com.swiftftp.app/Data/...`，路径要重新规划。
+- ✅ 写到 `~/Library/Application Support/SwiftFTP/known_hosts.json` → 沙盒下会重定向到容器内，`KnownHostsManager` 会创建目录；仍需 Release 沙盒包手测。
 
 **建议 entitlements（最小集优先）**：
 ```xml
@@ -159,16 +152,16 @@
 
 | # | 问题 | 状态 |
 |---|------|------|
-| A1 | App Sandbox 关闭 | 🔴 必修（见 §3.3） |
-| A2 | `CODE_SIGN_IDENTITY: "-"`、`CODE_SIGNING_REQUIRED: NO` | 🔴 必须切换为 Apple Distribution + MAS 描述文件 |
+| A1 | App Sandbox | ✅ 已启用；仍需 Release 签名包手测文件访问 |
+| A2 | 签名/描述文件 | 🔴 `DEVELOPMENT_TEAM` 仍为空，Archive 前必须配置 Apple Distribution + MAS 描述文件 |
 | A3 | 没有 Apple Developer Account（需付费 $99/年） | 🔴 商业前提 |
 | A4 | Bundle ID `com.swiftftp.app` 未在 App Store Connect 注册 | 🔴 |
 | A5 | AppIcon Set 已存在（16–1024），但提交前仍需在 Release `.app`、Finder、Dock、App Store Connect 截图中复核显示效果 | 🟢/复核 |
 | A6 | 没有 App Store Connect 物料：截图、副标题、关键字、宣传文本、隐私问卷 | 🔴 |
-| A7 | 没有支付/试用机制：MAS 不允许内置「试用到期变残疾」，必须 IAP 解锁或冻结功能 | 🟡 视定价模式 |
+| A7 | StoreKit 2 / 试用 | 🟡 基础 IAP/试用 UI 已有；必须在 StoreKit config 或 Sandbox 账号里跑通购买/恢复 |
 | A8 | `LSApplicationCategoryType` 已设为 `utilities`（OK） | ✅ |
 | A9 | `CFBundleShortVersionString = 2.0.0`，但 `CFBundleVersion = 1`——MAS 每次提交需要单调递增 build | 🟡 |
-| A10 | 未做「首次启动引导」：MAS 评审员 30 秒内看不到价值就拒，首屏只有空 sidebar 是减分项 | 🟡 |
+| A10 | 首次启动引导 | ✅ 已有 Onboarding；仍需截图和文案复核 |
 
 ### 4.2 隐私问卷 (Privacy Nutrition Label) 预填
 
@@ -232,18 +225,20 @@
 
 > 这一阶段做完后，MAS 审核**有把握通过**。
 
-- [ ] **S1: 切换密码到 Keychain**（用现有 `KeychainManager`），从 `UserDefaults` 移除 `password` 字段，迁移已有数据 ⏱ 1d
-- [ ] **S2: SFTP TOFU host-key 验证**，把 `KnownHostsManager` 接进 Citadel 验证回调 ⏱ 1d
-- [ ] **S3: FTPS 严格 TLS**（默认严格 + 高级开关允许自签）⏱ 0.5d
-- [ ] **A1/A2: 启用 App Sandbox + 配置 entitlements + 创建 Distribution 证书** ⏱ 1d
-- [ ] **沙盒下的 FSEvents**：security-scoped bookmark 持久化 ⏱ 1d
-- [ ] **T1: 大文件分块上传**（`FileHandle.read(upToCount:)` 流式读，避免 `Data(contentsOf:)`）⏱ 1d
-- [ ] **T2/T3: 修菜单空动作 / 实现/移除 verifyMD5 等死开关** ⏱ 0.5d
+- [x] **S1: 切换密码到 Keychain**（含旧明文迁移与单测）
+- [x] **S2: SFTP TOFU host-key 验证**（基础校验已接入）
+- [x] **S3: FTPS 默认严格 TLS + 高级开关**（例外模式仍建议收窄）
+- [x] **A1: 启用 App Sandbox + 最小 entitlements**
+- [ ] **A2: 配置 Apple Distribution / MAS provisioning / DEVELOPMENT_TEAM**
+- [x] **沙盒下的 FSEvents**：security-scoped bookmark 持久化
+- [x] **T1: SFTP 大文件分块上传**
+- [x] **T2/T3: 修菜单空动作 / 移除死开关 / maxConcurrent 启动加载**
 - [ ] **A5: 复核 AppIcon Set**（当前已有 1024–16 全套）；确认 Release `.app`、Finder、Dock、ASC 均显示正确 ⏱ 0.25d
 - [ ] **A6: App Store Connect 物料**（5 张截图、副标题、关键字、宣传文案、12+ 评级、隐私政策 URL）⏱ 1d
-- [ ] **A7: StoreKit 2 集成**（IAP 解锁 / 或 paid up-front）⏱ 1.5d
-- [ ] **首次启动引导**（3 步骤：新建连接 → 拖拽演示 → 实时同步介绍）⏱ 1d
-- [ ] **License/About 面板**（含 Citadel BSD 致谢）⏱ 0.5d
+- [ ] **A7: StoreKit 2 Sandbox 验证**（购买/恢复/失败态）
+- [x] **首次启动引导**（Onboarding 已有）
+- [x] **License/About 面板**（含致谢 JSON）
+- [ ] **真实 FTP/SFTP 集成测试与 MAS 沙盒手测**（文件选择、拖放、同步、Keychain、known_hosts）
 
 ### Phase 2 — 上架后体验提升（4–6 周）
 
@@ -251,7 +246,7 @@
 - [ ] 远端→本地拖出（drag out）⏱ 1d
 - [ ] 英文本地化（提交时选 zh + en）⏱ 1d
 - [ ] FTP Active 模式 ⏱ 1d
-- [ ] SFTP 断点续传（Citadel 的 `withFile(.read)` + offset）⏱ 2d
+- [x] SFTP 断点续传（upload/download offset 已实现）
 - [ ] 文件预览（QuickLook 集成） ⏱ 1d
 - [ ] 收藏路径 / 最近连接 ⏱ 1d
 - [ ] 代理（SOCKS5 / HTTP） ⏱ 2d
@@ -276,21 +271,21 @@
 □ Apple Developer Program 已付费
 □ Distribution 证书 + MAS 描述文件
 □ CFBundleVersion 单调递增
-□ App Sandbox = YES，entitlements 最小集
+□ App Sandbox = YES，entitlements 最小集（已配置；需 Release 包复核）
 □ Hardened Runtime = YES（archive 时自动）
 
 [功能/质量]
-□ 所有菜单项都有动作或被移除
+□ 所有菜单项都有动作或被移除（已修；需运行态复核）
 □ 启动后 30 秒内能看到产品价值（首次引导）
-□ 大文件（>500MB）上传/下载不 OOM
+□ 大文件（>500MB）上传/下载不 OOM（SFTP 已流式；FTP 仍需真实服务器压测）
 □ Cmd+Q / Cmd+W / Cmd+R 等系统快捷键正常
 □ 黑暗模式视觉验证（已用系统色，理论 OK）
 
 [安全]
-□ 所有密码 / passphrase 经 Keychain
-□ SFTP host-key TOFU
-□ FTPS 默认严格 TLS
-□ 关于面板含第三方致谢 + 隐私政策链接
+□ 所有密码 / passphrase 经 Keychain（已实现）
+□ SFTP host-key TOFU（已实现基础校验）
+□ FTPS 默认严格 TLS（已实现；自签例外需收窄）
+□ 关于面板含第三方致谢 + 隐私政策链接（About 已有，隐私政策 URL 待补）
 
 [App Store Connect]
 □ AppIcon 16–1024 全套已就绪（已完成）+ Release `.app` / Finder / Dock / ASC 上传预检显示正常
@@ -311,8 +306,8 @@
 
 ## 8. 我会怎么做（独立开发者建议）
 
-1. **本周**：把 Phase 1 里 Keychain、TOFU、TLS 三个安全洞补上；把 entitlements 切成沙盒并修复 FSEvents；这是技术债集中区，做完后的代码状态再评估更稳。
-2. **下周**：做 IAP + 首次引导 + 图标显示复核 + 截图 + ASC 物料；同时**先发一个 Developer ID 直营版**（Gumroad / 爱发电 / 微店），定价 ¥38（限时 50% 早鸟），收集 30–50 个真实用户反馈。
+1. **本周**：做 Release 签名/沙盒包手测，补 StoreKit Sandbox 流程，收窄 FTPS 自签例外，拉起本地 FTP/SFTP 集成测试。
+2. **下周**：图标显示复核 + 截图 + ASC 物料 + 隐私政策 URL；同时**先发一个 Developer ID 直营版**（Gumroad / 爱发电 / 微店），定价 ¥38（限时 50% 早鸟），收集 30–50 个真实用户反馈。
 3. **第 3–4 周**：根据直营版反馈打磨 1–2 个高频痛点（多窗口或英文化），提交 MAS。
 4. **MAS 上架后**：保持每月 1 个小版本（修 bug + 加 1 个小功能），半年后视情况上调到 ¥68。
 

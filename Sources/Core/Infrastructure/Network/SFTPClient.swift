@@ -236,6 +236,7 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                 var buffer = ByteBufferAllocator().buffer(capacity: chunkSize)
 
                 while true {
+                    try Task.checkCancellation()
                     guard let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty else { break }
                     buffer.clear(minimumCapacity: chunkSize)
                     buffer.writeBytes(chunk)
@@ -268,26 +269,40 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
         do {
             let attrs = try await sftp.getAttributes(at: remotePath)
             let total = Int64(attrs.size ?? 0)
+            guard offset <= total else {
+                throw FTPError.transferFailed("续传偏移量超过远端文件大小")
+            }
 
             try FileManager.default.createDirectory(
                 at: localURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
             try await sftp.withFile(filePath: remotePath, flags: .read) { file in
-                if FileManager.default.fileExists(atPath: localURL.path) {
+                if offset > 0 {
+                    guard FileManager.default.fileExists(atPath: localURL.path) else {
+                        throw FTPError.transferFailed("本地续传文件不存在，请重新开始下载")
+                    }
+                } else if FileManager.default.fileExists(atPath: localURL.path) {
                     try FileManager.default.removeItem(at: localURL)
                 }
-                FileManager.default.createFile(atPath: localURL.path, contents: nil)
+                if !FileManager.default.fileExists(atPath: localURL.path) {
+                    FileManager.default.createFile(atPath: localURL.path, contents: nil)
+                }
 
                 let handle = try FileHandle(forWritingTo: localURL)
                 defer { try? handle.close() }
+                if offset > 0 {
+                    try handle.truncate(atOffset: UInt64(offset))
+                    try handle.seek(toOffset: UInt64(offset))
+                }
 
                 let chunkSize: UInt32 = 256 * 1024
-                var readOffset: UInt64 = 0
+                var readOffset = UInt64(offset)
                 var lastTime = Date()
-                var lastBytes: Int64 = 0
+                var lastBytes = offset
                 var bps: Int64 = 0
 
                 while readOffset < UInt64(total) {
+                    try Task.checkCancellation()
                     let remaining = UInt64(total) - readOffset
                     let length = UInt32(min(UInt64(chunkSize), remaining))
                     var buffer = try await file.read(from: readOffset, length: length)
