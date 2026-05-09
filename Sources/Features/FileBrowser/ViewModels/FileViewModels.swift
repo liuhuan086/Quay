@@ -33,7 +33,10 @@ final class LocalFileVM: ObservableObject {
     @Published var selectedIDs: Set<UUID> = []
 
     private var history: [String] = []
-    var canGoBack: Bool { !history.isEmpty }
+    var canGoUp: Bool {
+        let parent = (currentPath as NSString).deletingLastPathComponent
+        return !parent.isEmpty && parent != currentPath
+    }
 
     var sortedItems: [LocalFileItem] {
         let filtered = showHidden ? items : items.filter { !$0.name.hasPrefix(".") }
@@ -48,9 +51,15 @@ final class LocalFileVM: ObservableObject {
         load(item.url.path)
     }
 
-    func navigateBack() {
-        guard let prev = history.popLast() else { return }
-        load(prev)
+    func navigateUp() {
+        guard canGoUp else { return }
+        navigate(to: (currentPath as NSString).deletingLastPathComponent)
+    }
+
+    func navigate(to path: String) {
+        guard path != currentPath else { return }
+        history.append(currentPath)
+        load(path)
     }
 
     func refresh() { load(currentPath) }
@@ -94,7 +103,7 @@ final class RemoteFileVM: ObservableObject {
 
     private var history: [String] = []
     private var client: any AnyFTPClient
-    var canGoBack: Bool { !history.isEmpty }
+    var canGoUp: Bool { currentPath != "/" }
 
     var sortedItems: [RemoteFileItem] {
         let filtered = showHidden ? items : items.filter { !$0.name.hasPrefix(".") }
@@ -113,9 +122,16 @@ final class RemoteFileVM: ObservableObject {
         await load(item.path)
     }
 
-    func goBack() async {
-        guard let prev = history.popLast() else { return }
-        await load(prev)
+    func goUp() async {
+        guard canGoUp else { return }
+        await navigate(to: parentPath(for: currentPath))
+    }
+
+    func navigate(to path: String) async {
+        let normalized = normalizedRemotePath(path)
+        guard normalized != currentPath else { return }
+        history.append(currentPath)
+        await load(normalized)
     }
 
     func refresh() async { await load(currentPath) }
@@ -156,5 +172,20 @@ final class RemoteFileVM: ObservableObject {
 
     private func friendlyMessage(_ error: Error) -> String {
         FTPError.friendly(error).errorDescription ?? error.localizedDescription
+    }
+
+    private func parentPath(for path: String) -> String {
+        let trimmed = normalizedRemotePath(path).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty else { return "/" }
+        let parts = trimmed.split(separator: "/").dropLast()
+        return parts.isEmpty ? "/" : "/" + parts.joined(separator: "/")
+    }
+
+    private func normalizedRemotePath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "/" }
+        let absolute = trimmed.hasPrefix("/") ? trimmed : "/" + trimmed
+        let collapsed = absolute.split(separator: "/").joined(separator: "/")
+        return collapsed.isEmpty ? "/" : "/" + collapsed
     }
 }
