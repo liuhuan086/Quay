@@ -252,16 +252,18 @@ struct RealtimeSyncView: View {
                         .font(.title2)
                 }
                 Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
+                HStack(spacing: 8) {
+                    Button { vm.showAddSheet = true } label: {
+                        Label("添加规则", systemImage: "plus")
+                    }
+                    .buttonStyle(RealtimeSyncHeaderGhostButtonStyle())
+
+                    Button { dismiss() } label: {
+                        Label("关闭", systemImage: "xmark")
+                    }
+                    .buttonStyle(RealtimeSyncHeaderGhostButtonStyle())
+                    .help("关闭")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("关闭")
-                Button { vm.showAddSheet = true } label: {
-                    Label("添加规则", systemImage: "plus")
-                }
-                .buttonStyle(.bordered)
             }
             .padding()
 
@@ -467,6 +469,47 @@ private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
             item.string(forType: .fileURL)
                 .flatMap { URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         } ?? []
+    }
+}
+
+private struct RealtimeSyncHeaderGhostButtonStyle: ButtonStyle {
+    var foreground: Color = .primary
+
+    func makeBody(configuration: Configuration) -> some View {
+        RealtimeSyncHeaderGhostButton(
+            configuration: configuration,
+            foreground: foreground
+        )
+    }
+}
+
+private struct RealtimeSyncHeaderGhostButton: View {
+    let configuration: ButtonStyle.Configuration
+    let foreground: Color
+    @State private var isHovering = false
+
+    var body: some View {
+        configuration.label
+            .font(.subheadline)
+            .foregroundColor(foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(backgroundColor)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .onHover { isHovering = $0 }
+    }
+
+    private var backgroundColor: Color {
+        if configuration.isPressed {
+            Color.primary.opacity(0.12)
+        } else if isHovering {
+            Color.primary.opacity(0.07)
+        } else {
+            Color.clear
+        }
     }
 }
 
