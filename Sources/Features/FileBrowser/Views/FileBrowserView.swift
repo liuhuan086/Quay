@@ -18,6 +18,7 @@ struct FileBrowserView: View {
     @StateObject private var remoteVM: RemoteFileVM
 
     @State private var showNewFolderRemote = false
+    @State private var showRenameLocal: LocalFileItem?
     @State private var showRenameRemote: RemoteFileItem?
     @State private var showSyncView = false
     @State private var newName = ""
@@ -57,6 +58,12 @@ struct FileBrowserView: View {
         .sheet(isPresented: $showNewFolderRemote) {
             NameInputSheet(title: "新建文件夹", placeholder: "文件夹名称", value: $newName) {
                 Task { await remoteVM.createFolder(name: newName); newName = "" }
+            }
+        }
+        .sheet(item: $showRenameLocal) { item in
+            NameInputSheet(title: "重命名", placeholder: item.name, value: $newName) {
+                localVM.rename(item: item, to: newName)
+                newName = ""
             }
         }
         .sheet(item: $showRenameRemote) { item in
@@ -163,7 +170,15 @@ struct FileBrowserView: View {
             onNewFolder: nil,
             onOpenExternal: { localVM.openInFinder() }
         ) {
-            LocalFileList(vm: localVM)
+            LocalFileList(vm: localVM,
+                          canDownload: !remoteVM.selectedIDs.isEmpty,
+                          onUpload: { uploadLocalItems($0) },
+                          onDownload: { downloadSelected() },
+                          onDelete: { localVM.delete($0) },
+                          onRename: { item in
+                              newName = item.name
+                              showRenameLocal = item
+                          })
         }
     }
 
@@ -289,6 +304,12 @@ struct FileBrowserView: View {
         } else {
             processUploadURLs(selected.map(\.url))
         }
+    }
+
+    private func uploadLocalItems(_ items: [LocalFileItem]) {
+        let files = items.filter { !$0.isDirectory }
+        guard !files.isEmpty else { return }
+        processUploadURLs(files.map(\.url))
     }
 
     private func processUploadURLs(_ urls: [URL]) {
@@ -473,6 +494,11 @@ struct BreadcrumbBar: View {
 // MARK: - Local File List
 struct LocalFileList: View {
     @ObservedObject var vm: LocalFileVM
+    let canDownload: Bool
+    let onUpload: ([LocalFileItem]) -> Void
+    let onDownload: () -> Void
+    let onDelete: ([LocalFileItem]) -> Void
+    let onRename: (LocalFileItem) -> Void
 
     var body: some View {
         Group {
@@ -517,7 +543,8 @@ struct LocalFileList: View {
             }.width(130)
         }
         .contextMenu(forSelectionType: UUID.self) { ids in
-            if let item = vm.sortedItems.first(where: { ids.contains($0.id) }) {
+            let items = selectedItems(for: ids)
+            if let item = items.first {
                 if item.isDirectory {
                     Button("打开文件夹") { vm.enter(item) }
                 } else {
@@ -525,6 +552,16 @@ struct LocalFileList: View {
                         NSWorkspace.shared.open(item.url)
                     }
                 }
+                Divider()
+                Button("上传") { onUpload(items) }
+                    .disabled(!items.contains(where: { !$0.isDirectory }))
+                Button("下载") { onDownload() }
+                    .disabled(!canDownload)
+                Divider()
+                if items.count == 1 {
+                    Button("重命名") { onRename(item) }
+                }
+                Button("删除", role: .destructive) { onDelete(items) }
             }
         } primaryAction: { ids in
             guard let item = vm.sortedItems.first(where: { ids.contains($0.id) }) else { return }
@@ -533,6 +570,10 @@ struct LocalFileList: View {
                 NSWorkspace.shared.open(item.url)
             }
         }
+    }
+
+    private func selectedItems(for ids: Set<UUID>) -> [LocalFileItem] {
+        vm.sortedItems.filter { ids.contains($0.id) }
     }
 }
 
