@@ -104,28 +104,33 @@ actor TransferEngine {
 
         do {
             let client = try await pool.borrowClient(password: password)
-            defer { Task { await pool.returnClient(client) } }
 
             let offset = tasks.first(where: { $0.id == id })?.resumeOffset ?? 0
 
-            if task.direction == .upload {
-                try await client.upload(
-                    localURL: task.localURL,
-                    remotePath: task.remotePath,
-                    offset: offset
-                ) { [weak self] progress in
-                    guard let self else { return }
-                    Task { await self.updateProgress(id: id, progress: progress) }
+            do {
+                if task.direction == .upload {
+                    try await client.upload(
+                        localURL: task.localURL,
+                        remotePath: task.remotePath,
+                        offset: offset
+                    ) { [weak self] progress in
+                        guard let self else { return }
+                        Task { await self.updateProgress(id: id, progress: progress) }
+                    }
+                } else {
+                    try await client.download(
+                        remotePath: task.remotePath,
+                        localURL: task.localURL,
+                        offset: offset
+                    ) { [weak self] progress in
+                        guard let self else { return }
+                        Task { await self.updateProgress(id: id, progress: progress) }
+                    }
                 }
-            } else {
-                try await client.download(
-                    remotePath: task.remotePath,
-                    localURL: task.localURL,
-                    offset: offset
-                ) { [weak self] progress in
-                    guard let self else { return }
-                    Task { await self.updateProgress(id: id, progress: progress) }
-                }
+                await pool.returnClient(client)
+            } catch {
+                await pool.returnClient(client)
+                throw error
             }
 
             markCompleted(id: id)

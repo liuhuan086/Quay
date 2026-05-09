@@ -214,6 +214,7 @@ public final class FTPClient: AnyFTPClient {
         }
 
         let dataConn = try await openPASV()
+        defer { dataConn.cancel() }
         try await sendCtrl("STOR \(remotePath)")
         let r = try await readControlLine()
         guard r.hasPrefix("150") || r.hasPrefix("125") else { throw FTPError.badResponse(r) }
@@ -229,6 +230,7 @@ public final class FTPClient: AnyFTPClient {
         var bps: Int64 = 0
 
         while true {
+            try Task.checkCancellation()
             let chunk = handle.readData(ofLength: chunkSize)
             guard !chunk.isEmpty else { break }
             try await send(data: chunk, on: dataConn)
@@ -243,7 +245,6 @@ public final class FTPClient: AnyFTPClient {
             onProgress(TransferProgress(bytesTransferred: sent, totalBytes: total, bytesPerSecond: bps))
         }
 
-        dataConn.cancel()
         _ = try await readControlLine()   // 226
         onProgress(TransferProgress(bytesTransferred: total, totalBytes: total, bytesPerSecond: 0))
     }
@@ -265,6 +266,7 @@ public final class FTPClient: AnyFTPClient {
         }
 
         let dataConn = try await openPASV()
+        defer { dataConn.cancel() }
         try await sendCtrl("RETR \(remotePath)")
         let r = try await readControlLine()
         guard r.hasPrefix("150") || r.hasPrefix("125") else { throw FTPError.fileNotFound(remotePath) }
@@ -294,7 +296,6 @@ public final class FTPClient: AnyFTPClient {
             onProgress(TransferProgress(bytesTransferred: received, totalBytes: total, bytesPerSecond: bps))
         }
 
-        dataConn.cancel()
         _ = try await readControlLine()
         onProgress(TransferProgress(bytesTransferred: total, totalBytes: total, bytesPerSecond: 0))
     }
@@ -414,6 +415,7 @@ public final class FTPClient: AnyFTPClient {
     private func receiveAll(on conn: NWConnection) async throws -> Data {
         var all = Data()
         while true {
+            try Task.checkCancellation()
             let chunk = try await recv(from: conn, min: 1, max: 65536)
             if chunk.isEmpty { break }
             all.append(chunk)
@@ -423,6 +425,7 @@ public final class FTPClient: AnyFTPClient {
 
     private func stream(on conn: NWConnection, handler: (Data) throws -> Void) async throws {
         while true {
+            try Task.checkCancellation()
             let chunk = try await recv(from: conn, min: 1, max: 65536)
             if chunk.isEmpty { break }
             try handler(chunk)
@@ -451,7 +454,7 @@ public final class FTPClient: AnyFTPClient {
                 default: break
                 }
             }
-            return RemoteFileItem(name: name, path: "\(base)/\(name)",
+            return RemoteFileItem(name: name, path: joinedRemotePath(base: base, name: name),
                                   isDirectory: isDir, size: size, modifiedDate: date)
         }
     }
@@ -464,9 +467,13 @@ public final class FTPClient: AnyFTPClient {
             let size = Int64(parts[4]) ?? 0
             let name = parts[8...].joined(separator: " ")
             guard name != "." && name != ".." else { return nil }
-            return RemoteFileItem(name: name, path: "\(base)/\(name)",
+            return RemoteFileItem(name: name, path: joinedRemotePath(base: base, name: name),
                                   isDirectory: isDir, size: size, permissions: perm)
         }
+    }
+
+    private func joinedRemotePath(base: String, name: String) -> String {
+        base.hasSuffix("/") ? base + name : base + "/" + name
     }
 }
 
