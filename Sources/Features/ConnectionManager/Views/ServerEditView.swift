@@ -118,7 +118,11 @@ struct ServerEditView: View {
                     Text("连接成功！延迟 \(ms)ms").foregroundColor(.green).font(.caption)
                 case .fail(let m):
                     Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                    Text(m).foregroundColor(.red).font(.caption).lineLimit(2)
+                    Text(m)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                        .lineLimit(3)
+                        .help(m)
                 }
                 Spacer()
                 Button("测试连接") { testConnection() }

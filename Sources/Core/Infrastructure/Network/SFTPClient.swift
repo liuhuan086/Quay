@@ -74,7 +74,11 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
 
             if await isTCPReachable(host: config.host, port: config.port) {
                 let detail = String(describing: error)
-                throw FTPError.connectionFailed("TCP 已连通 \(config.host):\(config.port)，但 SSH/SFTP 初始化失败。底层错误：\(detail)")
+                throw FTPError.connectionFailed(Self.sftpInitializationFailureMessage(
+                    host: config.host,
+                    port: config.port,
+                    detail: detail
+                ))
             }
 
             var lastError: Error = error
@@ -397,6 +401,19 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
         )
         let sftp = try await ssh.openSFTP()
         return (ssh, sftp)
+    }
+
+    private static func sftpInitializationFailureMessage(host: String, port: Int, detail: String) -> String {
+        let lowercased = detail.lowercased()
+        if lowercased.contains("singleconnectionfailure")
+            || lowercased.contains("connection timed out")
+            || lowercased.contains("banner") {
+            return "TCP 已连通 \(host):\(port)，但没有收到 SSH/SFTP 协议响应。请确认该端口运行的是 SSH/SFTP 服务，并检查端口转发、防火墙或 sshd 状态。"
+        }
+        if lowercased.contains("authentication") || lowercased.contains("password") {
+            return FTPError.authenticationFailed.errorDescription ?? "用户名或密码错误"
+        }
+        return "TCP 已连通 \(host):\(port)，但 SSH/SFTP 初始化失败：\(detail)"
     }
 
     private func isTCPReachable(host: String, port: Int) async -> Bool {

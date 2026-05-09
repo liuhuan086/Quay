@@ -47,7 +47,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
 // MARK: - RootView
 struct RootView: View {
-    let appState: AppState
+    @ObservedObject var appState: AppState
     @State private var colVisibility = NavigationSplitViewVisibility.all
 
     var body: some View {
