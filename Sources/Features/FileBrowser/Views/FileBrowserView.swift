@@ -171,9 +171,7 @@ struct FileBrowserView: View {
             onOpenExternal: { localVM.openInFinder() }
         ) {
             LocalFileList(vm: localVM,
-                          canDownload: !remoteVM.selectedIDs.isEmpty,
                           onUpload: { uploadLocalItems($0) },
-                          onDownload: { downloadSelected() },
                           onDelete: { localVM.delete($0) },
                           onRename: { item in
                               newName = item.name
@@ -276,69 +274,118 @@ struct FileBrowserView: View {
 
     // MARK: - Upload drop handler
     private func handleUploadDrop(_ urls: [URL]) {
-        let remoteBasePath = remoteVM.currentPath
-        for url in urls {
-            Task { @MainActor in
-                let remotePath = remoteBasePath.hasSuffix("/")
-                    ? remoteBasePath + url.lastPathComponent
-                    : remoteBasePath + "/" + url.lastPathComponent
-                await appState.enqueue(server: server, direction: .upload,
-                                       localURL: url, remotePath: remotePath)
-            }
-        }
+        uploadLocalURLs(urls)
     }
 
     // MARK: - Upload selected (local → remote)
     private func uploadSelected() {
-        let selected = localVM.sortedItems.filter { localVM.selectedIDs.contains($0.id) && !$0.isDirectory }
+        let selected = localVM.sortedItems.filter { localVM.selectedIDs.contains($0.id) }
         if selected.isEmpty {
             let panel = NSOpenPanel()
             panel.canChooseFiles = true
-            panel.canChooseDirectories = false
+            panel.canChooseDirectories = true
             panel.allowsMultipleSelection = true
-            panel.message = "选择要上传的文件"
+            panel.message = "选择要上传的文件或文件夹"
             panel.begin { response in
                 guard response == .OK else { return }
-                processUploadURLs(panel.urls)
+                uploadLocalURLs(panel.urls)
             }
         } else {
-            processUploadURLs(selected.map(\.url))
+            uploadLocalItems(selected)
         }
     }
 
     private func uploadLocalItems(_ items: [LocalFileItem]) {
-        let files = items.filter { !$0.isDirectory }
-        guard !files.isEmpty else { return }
-        processUploadURLs(files.map(\.url))
+        uploadLocalURLs(items.map(\.url))
     }
 
-    private func processUploadURLs(_ urls: [URL]) {
+    private func uploadLocalURLs(_ urls: [URL]) {
+        Task { await processUploadURLs(urls) }
+    }
+
+    @MainActor
+    private func processUploadURLs(_ urls: [URL]) async {
         let existingNames = Set(remoteVM.sortedItems.map(\.name))
-        var directFiles: [(URL, String)] = []
+        var directFiles: [(URL, String, String)] = []
         var conflicts: [OverwriteRequest] = []
 
         for url in urls {
-            let remotePath = remoteVM.currentPath.hasSuffix("/")
-                ? remoteVM.currentPath + url.lastPathComponent
-                : remoteVM.currentPath + "/" + url.lastPathComponent
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let remotePath = remotePath(appending: url.lastPathComponent, to: remoteVM.currentPath)
+            if isDirectory {
+                await enqueueDirectoryUpload(localURL: url, remoteDirectoryPath: remotePath)
+                continue
+            }
             if existingNames.contains(url.lastPathComponent) {
                 conflicts.append(OverwriteRequest(localURL: url, remotePath: remotePath,
                                                    direction: .upload, fileName: url.lastPathComponent))
             } else {
-                directFiles.append((url, remotePath))
+                directFiles.append((url, remotePath, url.lastPathComponent))
             }
         }
 
-        for (url, remotePath) in directFiles {
-            Task {
-                await appState.enqueue(server: server, direction: .upload,
-                                       localURL: url, remotePath: remotePath)
-            }
+        for (url, remotePath, _) in directFiles {
+            await appState.enqueue(server: server, direction: .upload,
+                                   localURL: url, remotePath: remotePath)
         }
         if !conflicts.isEmpty {
             pendingOverwriteFiles = conflicts
             showOverwriteConfirm = true
         }
+    }
+
+    @MainActor
+    private func enqueueDirectoryUpload(localURL: URL, remoteDirectoryPath: String) async {
+        await createRemoteDirectoryIfNeeded(remoteDirectoryPath)
+        let entries = directoryUploadEntries(for: localURL)
+
+        for entry in entries {
+            let childRemotePath = remotePath(appending: entry.relativePath, to: remoteDirectoryPath)
+            if entry.isDirectory {
+                await createRemoteDirectoryIfNeeded(childRemotePath)
+            } else {
+                await appState.enqueue(server: server, direction: .upload,
+                                       localURL: entry.url, remotePath: childRemotePath)
+            }
+        }
+    }
+
+    private func directoryUploadEntries(for rootURL: URL) -> [(url: URL, isDirectory: Bool, relativePath: String)] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: showHidden ? [] : [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var entries: [(URL, Bool, String)] = []
+        for case let childURL as URL in enumerator {
+            let isDirectory = (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let relativePath = childURL.path
+                .replacingOccurrences(of: rootURL.path + "/", with: "")
+            if isDirectory {
+                entries.append((childURL, true, relativePath))
+            } else {
+                entries.append((childURL, false, relativePath))
+            }
+        }
+        return entries
+    }
+
+    private func createRemoteDirectoryIfNeeded(_ path: String) async {
+        do {
+            try await primaryClient.createDirectory(path)
+        } catch {
+            // Existing directories are fine. Later file uploads will surface real path errors.
+        }
+    }
+
+    private func remotePath(appending component: String, to basePath: String) -> String {
+        let trimmedComponent = component.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmedComponent.isEmpty else { return basePath.isEmpty ? "/" : basePath }
+        if basePath.isEmpty || basePath == "/" {
+            return "/" + trimmedComponent
+        }
+        return basePath.hasSuffix("/") ? basePath + trimmedComponent : basePath + "/" + trimmedComponent
     }
 
     // MARK: - Download selected
@@ -494,9 +541,7 @@ struct BreadcrumbBar: View {
 // MARK: - Local File List
 struct LocalFileList: View {
     @ObservedObject var vm: LocalFileVM
-    let canDownload: Bool
     let onUpload: ([LocalFileItem]) -> Void
-    let onDownload: () -> Void
     let onDelete: ([LocalFileItem]) -> Void
     let onRename: (LocalFileItem) -> Void
 
@@ -554,9 +599,6 @@ struct LocalFileList: View {
                 }
                 Divider()
                 Button("上传") { onUpload(items) }
-                    .disabled(!items.contains(where: { !$0.isDirectory }))
-                Button("下载") { onDownload() }
-                    .disabled(!canDownload)
                 Divider()
                 if items.count == 1 {
                     Button("重命名") { onRename(item) }
