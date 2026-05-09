@@ -154,9 +154,10 @@ struct FileBrowserView: View {
     private var localPane: some View {
         FilePane(
             title: "本地", icon: "desktopcomputer",
-            path: localVM.currentPath, canGoBack: localVM.canGoBack,
+            path: localVM.currentPath, canGoUp: localVM.canGoUp,
             isLoading: false,
-            onBack: { localVM.navigateBack() },
+            onUp: { localVM.navigateUp() },
+            onNavigate: { localVM.navigate(to: $0) },
             onRefresh: { localVM.refresh() },
             onNewFolder: nil,
             onOpenExternal: { localVM.openInFinder() }
@@ -168,9 +169,10 @@ struct FileBrowserView: View {
     private var remotePane: some View {
         FilePane(
             title: server.displayName, icon: server.protocol_.sfSymbol,
-            path: remoteVM.currentPath, canGoBack: remoteVM.canGoBack,
+            path: remoteVM.currentPath, canGoUp: remoteVM.canGoUp,
             isLoading: remoteVM.isLoading,
-            onBack: { Task { await remoteVM.goBack() } },
+            onUp: { Task { await remoteVM.goUp() } },
+            onNavigate: { path in Task { await remoteVM.navigate(to: path) } },
             onRefresh: { Task { await remoteVM.refresh() } },
             onNewFolder: { showNewFolderRemote = true },
             onOpenExternal: nil
@@ -366,9 +368,10 @@ struct FilePane<Content: View>: View {
     let title: String
     let icon: String
     let path: String
-    let canGoBack: Bool
+    let canGoUp: Bool
     let isLoading: Bool
-    let onBack: () -> Void
+    let onUp: () -> Void
+    let onNavigate: (String) -> Void
     let onRefresh: () -> Void
     let onNewFolder: (() -> Void)?
     let onOpenExternal: (() -> Void)?
@@ -391,7 +394,7 @@ struct FilePane<Content: View>: View {
             .background(Color(NSColor.controlBackgroundColor))
 
             // Breadcrumb
-            BreadcrumbBar(path: path, canGoBack: canGoBack, onBack: onBack)
+            BreadcrumbBar(path: path, canGoUp: canGoUp, onUp: onUp, onNavigate: onNavigate)
 
             Divider()
             content()
@@ -422,20 +425,41 @@ struct FilePane<Content: View>: View {
 // MARK: - Breadcrumb
 struct BreadcrumbBar: View {
     let path: String
-    let canGoBack: Bool
-    let onBack: () -> Void
+    let canGoUp: Bool
+    let onUp: () -> Void
+    let onNavigate: (String) -> Void
 
-    var crumbs: [String] { path.split(separator: "/").map(String.init) }
+    var crumbs: [(name: String, path: String)] {
+        let parts = path.split(separator: "/").map(String.init)
+        var current = ""
+        return parts.map { part in
+            current += "/" + part
+            return (part, current)
+        }
+    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                Button { onBack() } label: { Image(systemName: "chevron.left").font(.caption) }
-                    .buttonStyle(.plain).disabled(!canGoBack).padding(.horizontal, 4)
-                Image(systemName: "externaldrive").font(.caption2).foregroundColor(.secondary)
-                ForEach(Array(crumbs.enumerated()), id: \.offset) { _, c in
+                Button { onUp() } label: { Image(systemName: "chevron.left").font(.caption) }
+                    .buttonStyle(.plain)
+                    .disabled(!canGoUp)
+                    .padding(.horizontal, 4)
+                    .help("上一级")
+                Button { onNavigate("/") } label: {
+                    Image(systemName: "externaldrive")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("根目录")
+                ForEach(Array(crumbs.enumerated()), id: \.offset) { _, crumb in
                     Image(systemName: "chevron.right").font(.caption2).foregroundColor(.secondary)
-                    Text(c).font(.system(size: 11)).lineLimit(1)
+                    Button { onNavigate(crumb.path) } label: {
+                        Text(crumb.name).font(.system(size: 11)).lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .help(crumb.path)
                 }
             }
             .padding(.horizontal, 8)
