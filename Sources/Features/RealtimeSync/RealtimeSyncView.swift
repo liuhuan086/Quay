@@ -199,6 +199,7 @@ extension SyncManager {
 // MARK: - RealtimeSyncView
 struct RealtimeSyncView: View {
     @ObservedObject var vm: RealtimeSyncViewModel
+    @Environment(\.dismiss) private var dismiss
 
     // Add-sheet state
     @State private var localPath = ""
@@ -251,6 +252,12 @@ struct RealtimeSyncView: View {
                         .font(.title2)
                 }
                 Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("关闭")
                 Button { vm.showAddSheet = true } label: {
                     Label("添加规则", systemImage: "plus")
                 }
