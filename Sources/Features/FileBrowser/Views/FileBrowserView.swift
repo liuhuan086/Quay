@@ -2,6 +2,11 @@
 import SwiftUI
 import AppKit
 
+private enum BrowserPane: Hashable {
+    case local
+    case remote
+}
+
 // MARK: - FileBrowserView
 struct FileBrowserView: View {
     let appState: AppState
@@ -18,6 +23,7 @@ struct FileBrowserView: View {
     @State private var newName = ""
     @State private var pendingOverwriteFiles: [OverwriteRequest] = []
     @State private var showOverwriteConfirm = false
+    @State private var compactPane: BrowserPane = .local
 
     struct OverwriteRequest: Identifiable {
         let id = UUID()
@@ -36,77 +42,18 @@ struct FileBrowserView: View {
     }
 
     var body: some View {
-        HSplitView {
-            // ── Local pane ──
-            FilePane(
-                title: "本地", icon: "desktopcomputer",
-                path: localVM.currentPath, canGoBack: localVM.canGoBack,
-                isLoading: false,
-                onBack: { localVM.navigateBack() },
-                onRefresh: { localVM.refresh() },
-                onNewFolder: nil,
-                onOpenExternal: { localVM.openInFinder() }
-            ) {
-                LocalFileList(vm: localVM)
-            }
-            .frame(minWidth: 280, idealWidth: 600, maxWidth: .infinity)
-            .layoutPriority(1)
-
-            // ── Transfer buttons (center column) ──
-            VStack(spacing: 12) {
-                Spacer()
-                Button { uploadSelected() } label: {
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(.blue)
-                }
-                .buttonStyle(.plain)
-                .help("上传选中文件")
-
-                Button { downloadSelected() } label: {
-                    Image(systemName: "arrow.left.circle.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(.green)
-                }
-                .buttonStyle(.plain)
-                .help("下载选中文件")
-                .disabled(remoteVM.selectedIDs.isEmpty)
-
-                Divider().frame(width: 24)
-
-                Button { showSyncView = true } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath.circle")
-                        .font(.system(size: 20))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("自动同步设置")
-
-                Spacer()
-            }
-            .frame(width: 44)
-            .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
-
-            // ── Remote pane ──
-            FilePane(
-                title: server.displayName, icon: server.protocol_.sfSymbol,
-                path: remoteVM.currentPath, canGoBack: remoteVM.canGoBack,
-                isLoading: remoteVM.isLoading,
-                onBack: { Task { await remoteVM.goBack() } },
-                onRefresh: { Task { await remoteVM.refresh() } },
-                onNewFolder: { showNewFolderRemote = true },
-                onOpenExternal: nil
-            ) {
-                FileDropContainer(onDrop: handleUploadDrop) {
-                    RemoteFileList(vm: remoteVM,
-                                   onDownload: { downloadSelected() },
-                                   onDelete: { Task { await remoteVM.deleteSelected() } },
-                                   onRename: { item in showRenameRemote = item })
+        GeometryReader { proxy in
+            let compact = proxy.size.width < 720
+            Group {
+                if compact {
+                    compactBrowser
+                } else {
+                    splitBrowser
                 }
             }
-            .frame(minWidth: 280, idealWidth: 600, maxWidth: .infinity)
-            .layoutPriority(1)
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showNewFolderRemote) {
             NameInputSheet(title: "新建文件夹", placeholder: "文件夹名称", value: $newName) {
                 Task { await remoteVM.createFolder(name: newName); newName = "" }
@@ -162,6 +109,146 @@ struct FileBrowserView: View {
             let names = pendingOverwriteFiles.map(\.fileName).joined(separator: "\n")
             Text("以下文件已存在，是否覆盖？\n\(names)")
         }
+    }
+
+    private var splitBrowser: some View {
+        HSplitView {
+            localPane
+                .frame(minWidth: 220, idealWidth: 560, maxWidth: .infinity)
+                .layoutPriority(1)
+
+            transferRail
+
+            remotePane
+                .frame(minWidth: 220, idealWidth: 560, maxWidth: .infinity)
+                .layoutPriority(1)
+        }
+    }
+
+    private var compactBrowser: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $compactPane) {
+                Label("本地", systemImage: "desktopcomputer").tag(BrowserPane.local)
+                Label("远程", systemImage: server.protocol_.sfSymbol).tag(BrowserPane.remote)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+
+            Divider()
+
+            Group {
+                switch compactPane {
+                case .local: localPane
+                case .remote: remotePane
+                }
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider()
+            compactTransferBar
+        }
+    }
+
+    private var localPane: some View {
+        FilePane(
+            title: "本地", icon: "desktopcomputer",
+            path: localVM.currentPath, canGoBack: localVM.canGoBack,
+            isLoading: false,
+            onBack: { localVM.navigateBack() },
+            onRefresh: { localVM.refresh() },
+            onNewFolder: nil,
+            onOpenExternal: { localVM.openInFinder() }
+        ) {
+            LocalFileList(vm: localVM)
+        }
+    }
+
+    private var remotePane: some View {
+        FilePane(
+            title: server.displayName, icon: server.protocol_.sfSymbol,
+            path: remoteVM.currentPath, canGoBack: remoteVM.canGoBack,
+            isLoading: remoteVM.isLoading,
+            onBack: { Task { await remoteVM.goBack() } },
+            onRefresh: { Task { await remoteVM.refresh() } },
+            onNewFolder: { showNewFolderRemote = true },
+            onOpenExternal: nil
+        ) {
+            FileDropContainer(onDrop: handleUploadDrop) {
+                RemoteFileList(vm: remoteVM,
+                               onDownload: { downloadSelected() },
+                               onDelete: { Task { await remoteVM.deleteSelected() } },
+                               onRename: { item in showRenameRemote = item })
+            }
+        }
+    }
+
+    private var transferRail: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            transferButton(systemImage: "arrow.right.circle.fill",
+                           color: .blue,
+                           help: "上传选中文件",
+                           action: uploadSelected)
+            transferButton(systemImage: "arrow.left.circle.fill",
+                           color: .green,
+                           help: "下载选中文件",
+                           action: downloadSelected)
+                .disabled(remoteVM.selectedIDs.isEmpty)
+
+            Divider().frame(width: 24)
+
+            Button { showSyncView = true } label: {
+                Image(systemName: "arrow.triangle.2.circlepath.circle")
+                    .font(.system(size: 20))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("自动同步设置")
+
+            Spacer()
+        }
+        .frame(width: 40)
+        .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
+    }
+
+    private var compactTransferBar: some View {
+        HStack(spacing: 18) {
+            Spacer()
+            transferButton(systemImage: "arrow.up.doc.fill",
+                           color: .blue,
+                           help: "上传选中文件",
+                           action: uploadSelected)
+            transferButton(systemImage: "arrow.down.doc.fill",
+                           color: .green,
+                           help: "下载选中文件",
+                           action: downloadSelected)
+                .disabled(remoteVM.selectedIDs.isEmpty)
+            Button { showSyncView = true } label: {
+                Image(systemName: "arrow.triangle.2.circlepath.circle")
+                    .font(.system(size: 18))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("自动同步设置")
+            Spacer()
+        }
+        .padding(.vertical, 7)
+        .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    private func transferButton(systemImage: String,
+                                color: Color,
+                                help: String,
+                                action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22))
+                .foregroundColor(color)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func applyShowHidden(_ value: Bool) {
