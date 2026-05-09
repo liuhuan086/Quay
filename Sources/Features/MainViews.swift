@@ -15,7 +15,7 @@ struct SwiftFTPApp: App {
             RootView(appState: appState)
                 .environmentObject(appState)
                 .environmentObject(appState.transferBadgeState)
-                .frame(minWidth: 960, minHeight: 640)
+                .frame(minWidth: 760, minHeight: 560)
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
@@ -54,7 +54,7 @@ struct RootView: View {
         ZStack {
             NavigationSplitView(columnVisibility: $colVisibility) {
                 SidebarView()
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
+                    .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 360)
             } detail: {
                 DetailView()
             }
@@ -231,10 +231,14 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             // Search
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundColor(.secondary).font(.caption)
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                    .frame(width: 14)
                 TextField("搜索服务器", text: $search)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
+                    .frame(minWidth: 0)
                 if !search.isEmpty {
                     Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundColor(.secondary)
@@ -262,10 +266,16 @@ struct SidebarView: View {
                                     connectOrDisconnect(s)
                                 })
                                 .tag(s.id)
+                                .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                                 .contextMenu { rowMenu(for: s) }
                         }
                     } header: {
-                        Text(group).font(.caption2).foregroundColor(.secondary).textCase(.uppercase)
+                        Text(group)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .textCase(.uppercase)
                     }
                 }
             }
@@ -274,6 +284,8 @@ struct SidebarView: View {
             Divider()
             SidebarToolbar(onAdd: { appState.presentAddServer() })
         }
+        .frame(minWidth: 240)
+        .layoutPriority(2)
         .background(InitialFirstResponderClearer())
         .sheet(item: $editTarget) { server in
             ServerEditView(config: server, servers: appState.servers) { cfg in
@@ -334,13 +346,25 @@ struct ServerRow: View {
     var body: some View {
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(server.displayName).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(server.host).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+                Text(server.displayName)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(server.host)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
             Spacer()
             stateIndicator
+                .frame(width: 18, alignment: .trailing)
         }
         .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(server.connectionSummary)
     }
 
     @ViewBuilder var stateIndicator: some View {
