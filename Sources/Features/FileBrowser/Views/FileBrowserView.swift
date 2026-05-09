@@ -76,6 +76,7 @@ struct FileBrowserView: View {
         )
         .onAppear {
             applyShowHidden(showHidden)
+            localVM.requestInitialDirectoryAccessIfNeeded()
         }
         .onChange(of: showHidden) { _, newValue in
             applyShowHidden(newValue)
@@ -474,6 +475,34 @@ struct LocalFileList: View {
     @ObservedObject var vm: LocalFileVM
 
     var body: some View {
+        Group {
+            if let errorMessage = vm.errorMessage {
+                VStack(spacing: 10) {
+                    Image(systemName: "folder.badge.questionmark")
+                        .font(.title)
+                        .foregroundColor(.secondary)
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(4)
+                        .frame(maxWidth: 360)
+                    HStack(spacing: 10) {
+                        Button("选择授权目录") { vm.requestDirectoryAccess() }
+                            .buttonStyle(.borderedProminent)
+                        Button("重试") { vm.refresh() }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                localTable
+            }
+        }
+    }
+
+    private var localTable: some View {
         Table(vm.sortedItems, selection: $vm.selectedIDs) {
             TableColumn("名称") { item in
                 Label(item.name, systemImage: item.sfSymbol)
@@ -493,8 +522,6 @@ struct LocalFileList: View {
                     Button("打开文件夹") { vm.enter(item) }
                 } else {
                     Button("打开文件") {
-                        // FIXME(AppSandbox): require user-selected/bookmarked access
-                        // before opening arbitrary local file URLs.
                         NSWorkspace.shared.open(item.url)
                     }
                 }
@@ -503,8 +530,6 @@ struct LocalFileList: View {
             guard let item = vm.sortedItems.first(where: { ids.contains($0.id) }) else { return }
             if item.isDirectory { vm.enter(item) }
             else {
-                // FIXME(AppSandbox): require user-selected/bookmarked access
-                // before opening arbitrary local file URLs.
                 NSWorkspace.shared.open(item.url)
             }
         }

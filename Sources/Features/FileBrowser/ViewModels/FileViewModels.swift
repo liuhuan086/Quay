@@ -31,8 +31,16 @@ final class LocalFileVM: ObservableObject {
     @Published var currentPath: String = NSHomeDirectory()
     @Published var showHidden = false
     @Published var selectedIDs: Set<UUID> = []
+    @Published var errorMessage: String?
 
     private var history: [String] = []
+    private let directoryBookmarkKey = "swiftftp.v2.localDirectoryBookmark"
+    private var activeScopedURL: URL?
+    private var isAccessingScopedURL = false
+    private var isPresentingAccessPanel = false
+    private var shouldOfferInitialAccess = false
+    private var pendingAccessPath: String?
+
     var canGoUp: Bool {
         let parent = (currentPath as NSString).deletingLastPathComponent
         return !parent.isEmpty && parent != currentPath
@@ -43,12 +51,17 @@ final class LocalFileVM: ObservableObject {
         return filtered.filter { $0.isDirectory } + filtered.filter { !$0.isDirectory }
     }
 
-    init() { load(currentPath) }
+    init() {
+        if !restoreBookmarkedDirectory() {
+            _ = load(currentPath)
+            pendingAccessPath = preferredUserDirectoryPath
+            shouldOfferInitialAccess = true
+        }
+    }
 
     func enter(_ item: LocalFileItem) {
         guard item.isDirectory else { return }
-        history.append(currentPath)
-        load(item.url.path)
+        navigate(to: item.url.path)
     }
 
     func navigateUp() {
@@ -57,37 +70,172 @@ final class LocalFileVM: ObservableObject {
     }
 
     func navigate(to path: String) {
-        guard path != currentPath else { return }
-        history.append(currentPath)
-        load(path)
+        let normalizedPath = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        guard normalizedPath != currentPath else { return }
+        let previousPath = currentPath
+        if load(normalizedPath) {
+            history.append(previousPath)
+        } else {
+            requestDirectoryAccess(
+                suggestedPath: normalizedPath,
+                message: "SwiftFTP 需要你授权访问此目录或它的上级目录。"
+            )
+        }
     }
 
-    func refresh() { load(currentPath) }
+    func refresh() { _ = load(currentPath) }
+
+    func requestInitialDirectoryAccessIfNeeded() {
+        guard shouldOfferInitialAccess else { return }
+        shouldOfferInitialAccess = false
+        requestDirectoryAccess(
+            suggestedPath: pendingAccessPath ?? preferredUserDirectoryPath,
+            message: "请选择一个本地目录，授权 SwiftFTP 浏览、上传和下载文件。"
+        )
+    }
+
+    func requestDirectoryAccess() {
+        requestDirectoryAccess(
+            suggestedPath: pendingAccessPath ?? currentPath,
+            message: "请选择要授权 SwiftFTP 访问的本地目录。"
+        )
+    }
 
     func openInFinder() {
-        // FIXME(AppSandbox): only open folders the user selected or restored
-        // through a security-scoped bookmark.
         NSWorkspace.shared.open(URL(fileURLWithPath: currentPath))
     }
 
-    private func load(_ path: String) {
+    @discardableResult
+    private func load(_ path: String) -> Bool {
         let fm = FileManager.default
-        guard let urls = try? fm.contentsOfDirectory(
-            at: URL(fileURLWithPath: path),
-            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
-            options: []
-        ) else { return }
-
-        items = urls.map { url in
-            let res = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
-            return LocalFileItem(
-                url: url, name: url.lastPathComponent,
-                isDirectory: res?.isDirectory ?? false,
-                size: Int64(res?.fileSize ?? 0),
-                modifiedDate: res?.contentModificationDate
+        let directoryURL = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        do {
+            let urls = try fm.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+                options: []
             )
+
+            items = urls.map { url in
+                let res = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+                return LocalFileItem(
+                    url: url, name: url.lastPathComponent,
+                    isDirectory: res?.isDirectory ?? false,
+                    size: Int64(res?.fileSize ?? 0),
+                    modifiedDate: res?.contentModificationDate
+                )
+            }
+            currentPath = directoryURL.path
+            selectedIDs.removeAll()
+            errorMessage = nil
+            pendingAccessPath = nil
+            return true
+        } catch {
+            errorMessage = Self.localAccessErrorMessage(error, path: directoryURL.path)
+            pendingAccessPath = directoryURL.path
+            return false
         }
-        currentPath = path
+    }
+
+    private func restoreBookmarkedDirectory() -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: directoryBookmarkKey) else { return false }
+        do {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            activateSecurityScope(for: url)
+            if isStale {
+                persistBookmark(for: url)
+            }
+            return load(url.path)
+        } catch {
+            UserDefaults.standard.removeObject(forKey: directoryBookmarkKey)
+            errorMessage = "本地目录授权已失效，请重新选择目录。"
+            return false
+        }
+    }
+
+    private func requestDirectoryAccess(suggestedPath: String, message: String) {
+        guard !isPresentingAccessPanel else { return }
+        isPresentingAccessPanel = true
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "授权访问"
+        panel.message = message
+        panel.directoryURL = URL(fileURLWithPath: suggestedPath, isDirectory: true)
+
+        panel.begin { [weak self] response in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isPresentingAccessPanel = false
+                guard response == .OK, let url = panel.url else {
+                    self.errorMessage = "未授予本地目录访问权限。请选择一个目录后才能稳定浏览、上传和下载。"
+                    return
+                }
+                self.activateSecurityScope(for: url)
+                self.persistBookmark(for: url)
+                _ = self.load(url.path)
+            }
+        }
+    }
+
+    private func activateSecurityScope(for url: URL) {
+        if isAccessingScopedURL {
+            activeScopedURL?.stopAccessingSecurityScopedResource()
+        }
+        activeScopedURL = url
+        isAccessingScopedURL = url.startAccessingSecurityScopedResource()
+    }
+
+    private func persistBookmark(for url: URL) {
+        do {
+            let data = try url.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            UserDefaults.standard.set(data, forKey: directoryBookmarkKey)
+        } catch {
+            errorMessage = "目录已授权，但保存授权记录失败：\(error.localizedDescription)"
+        }
+    }
+
+    private var preferredUserDirectoryPath: String {
+        let userName = NSUserName()
+        return userName.isEmpty ? NSHomeDirectory() : "/Users/\(userName)"
+    }
+
+    private static func localAccessErrorMessage(_ error: Error, path: String) -> String {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain {
+            switch nsError.code {
+            case NSFileReadNoPermissionError, NSFileWriteNoPermissionError:
+                return "没有权限访问：\(path)。请点击“选择授权目录”授予访问权限。"
+            case NSFileReadNoSuchFileError:
+                return "目录不存在：\(path)"
+            default:
+                break
+            }
+        }
+        if nsError.domain == NSPOSIXErrorDomain {
+            switch nsError.code {
+            case Int(EACCES), Int(EPERM):
+                return "没有权限访问：\(path)。请点击“选择授权目录”授予访问权限。"
+            case Int(ENOENT):
+                return "目录不存在：\(path)"
+            default:
+                break
+            }
+        }
+        return "无法打开目录：\(path)。\(error.localizedDescription)"
     }
 }
 
@@ -118,8 +266,10 @@ final class RemoteFileVM: ObservableObject {
 
     func enter(_ item: RemoteFileItem) async {
         guard item.isDirectory else { return }
-        history.append(currentPath)
-        await load(item.path)
+        let previousPath = currentPath
+        if await load(item.path) {
+            history.append(previousPath)
+        }
     }
 
     func goUp() async {
@@ -130,8 +280,10 @@ final class RemoteFileVM: ObservableObject {
     func navigate(to path: String) async {
         let normalized = normalizedRemotePath(path)
         guard normalized != currentPath else { return }
-        history.append(currentPath)
-        await load(normalized)
+        let previousPath = currentPath
+        if await load(normalized) {
+            history.append(previousPath)
+        }
     }
 
     func refresh() async { await load(currentPath) }
@@ -159,15 +311,20 @@ final class RemoteFileVM: ObservableObject {
         catch { errorMessage = friendlyMessage(error) }
     }
 
-    private func load(_ path: String) async {
+    @discardableResult
+    private func load(_ path: String) async -> Bool {
         isLoading = true; errorMessage = nil
         do {
             items = try await client.listDirectory(path)
             currentPath = path
+            selectedIDs.removeAll()
+            isLoading = false
+            return true
         } catch {
             errorMessage = friendlyMessage(error)
+            isLoading = false
+            return false
         }
-        isLoading = false
     }
 
     private func friendlyMessage(_ error: Error) -> String {
