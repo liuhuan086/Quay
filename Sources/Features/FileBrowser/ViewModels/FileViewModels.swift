@@ -85,6 +85,39 @@ final class LocalFileVM: ObservableObject {
 
     func refresh() { _ = load(currentPath) }
 
+    func delete(_ itemsToDelete: [LocalFileItem]) {
+        guard !itemsToDelete.isEmpty else { return }
+        let fm = FileManager.default
+        var failureMessage: String?
+        for item in itemsToDelete {
+            do {
+                try fm.removeItem(at: item.url)
+            } catch {
+                failureMessage = "删除失败：\(item.name)。\(error.localizedDescription)"
+                break
+            }
+        }
+        selectedIDs.removeAll()
+        refresh()
+        if let failureMessage {
+            errorMessage = failureMessage
+        }
+    }
+
+    func rename(item: LocalFileItem, to newName: String) {
+        let trimmedName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, trimmedName != item.name else { return }
+        let targetURL = item.url
+            .deletingLastPathComponent()
+            .appendingPathComponent(trimmedName, isDirectory: item.isDirectory)
+        do {
+            try FileManager.default.moveItem(at: item.url, to: targetURL)
+            refresh()
+        } catch {
+            errorMessage = "重命名失败：\(item.name)。\(error.localizedDescription)"
+        }
+    }
+
     func requestInitialDirectoryAccessIfNeeded() {
         guard shouldOfferInitialAccess else { return }
         shouldOfferInitialAccess = false
