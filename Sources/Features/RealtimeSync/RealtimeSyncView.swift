@@ -184,6 +184,17 @@ actor SyncManager {
     }
 }
 
+fileprivate struct PreparedSyncRule: Sendable {
+    let localPath: String
+    let localPathBookmark: Data
+    let remotePath: String
+    let excludePatterns: [String]
+    let mode: SyncRuleMode
+    let initialSyncPolicy: SyncInitialSyncPolicy
+    let mirrorDeleteEnabled: Bool
+    let plan: InitialSyncPlan
+}
+
 // MARK: - RealtimeSyncViewModel
 @MainActor
 final class RealtimeSyncViewModel: ObservableObject {
@@ -210,11 +221,21 @@ final class RealtimeSyncViewModel: ObservableObject {
     }
 
     // MARK: - Add watcher
-    func addWatcher(localPath: String, localPathBookmark: Data, remotePath: String, excludePatterns: [String]) {
+    func addWatcher(
+        localPath: String,
+        localPathBookmark: Data,
+        remotePath: String,
+        excludePatterns: [String],
+        mode: SyncRuleMode = .realtimeUpload,
+        initialSyncPolicy: SyncInitialSyncPolicy = .futureOnly,
+        mirrorDeleteEnabled: Bool = false
+    ) {
         let w = SyncWatcher(
             id: UUID(), serverID: server.id, serverName: server.displayName,
             localPath: localPath, localPathBookmark: localPathBookmark, remotePath: remotePath,
-            excludePatterns: excludePatterns, isActive: true,
+            excludePatterns: excludePatterns, mode: mode,
+            initialSyncPolicy: initialSyncPolicy, mirrorDeleteEnabled: mirrorDeleteEnabled,
+            isActive: true,
             lastSyncAt: nil, totalSynced: 0
         )
         watchers.append(w)
@@ -222,17 +243,26 @@ final class RealtimeSyncViewModel: ObservableObject {
         refreshWatcher()
     }
 
-    /// Full safety-gated creation: path validation → remote same-name
-    /// collision block → persist. Returns true only when the rule was
-    /// created; otherwise an explanatory alert is shown and nothing is saved.
-    func validateAndAddWatcher(
+    /// Full safety-gated creation: path validation → recursive dry-run plan.
+    /// Returns a prepared rule only when creation is safe to confirm.
+    fileprivate func prepareWatcher(
         localPath: String,
         localPathBookmark: Data,
         remotePath: String,
-        excludePatterns: [String]
-    ) async -> Bool {
+        excludePatterns: [String],
+        mode: SyncRuleMode,
+        initialSyncPolicy: SyncInitialSyncPolicy
+    ) async -> PreparedSyncRule? {
         isValidating = true
         defer { isValidating = false }
+
+        guard mode == .realtimeUpload else {
+            appState.alertItem = AlertItem(
+                title: "镜像模式尚未开放创建",
+                message: "单向镜像需要远程回收站、marker 校验和删除阈值一起上线。当前版本先只允许创建实时上传规则，避免出现看起来是镜像、实际还没有安全删除保护的规则。"
+            )
+            return nil
+        }
 
         let existing = watchers.map { (local: $0.localPath, remote: $0.remotePath) }
         if let error = SyncPathValidator.validate(
@@ -241,54 +271,192 @@ final class RealtimeSyncViewModel: ObservableObject {
             existingRules: existing
         ) {
             appState.alertItem = AlertItem(title: "无法创建同步规则", message: error.message)
-            return false
+            return nil
         }
 
         let matcher = ExclusionMatcher(
             patterns: excludePatterns + SyncWatcher.mandatorySecretExcludes
         )
-        let localNames: Set<String>
+        let localItems: [SyncSnapshotItem]
         do {
-            let children = try FileManager.default.contentsOfDirectory(atPath: localPath)
-            localNames = Set(children.filter {
-                !matcher.shouldExclude(localPath + "/" + $0)
-            })
+            localItems = try localSnapshot(localPath: localPath, matcher: matcher)
         } catch {
             appState.alertItem = AlertItem(
                 title: "无法创建同步规则",
                 message: "无法读取本地文件夹「\(localPath)」的内容，请重新选择。"
             )
-            return false
+            return nil
         }
 
-        let remoteNames: Set<String>
+        let remoteItems: [SyncSnapshotItem]
         do {
-            remoteNames = try await appState.remoteDirectoryNames(
-                server: server, path: remotePath
+            remoteItems = try await appState.remoteSnapshot(
+                server: server,
+                path: remotePath,
+                matcher: matcher
             )
         } catch {
             appState.showError(error)
-            return false
+            return nil
         }
 
-        let collisions = localNames.intersection(remoteNames).sorted()
-        if !collisions.isEmpty {
-            let shown = collisions.prefix(8).joined(separator: "、")
-            let more = collisions.count > 8 ? " 等 \(collisions.count) 个" : ""
-            appState.alertItem = AlertItem(
-                title: "远程目录已存在同名文件",
-                message: "远程路径「\(remotePath)」中已存在与本地同名的文件/文件夹：\(shown)\(more)。为防止覆盖他人数据，已停止创建。请改用一个空的或专用的远程目录。"
+        let plan = InitialSyncPlanner.plan(
+            localItems: localItems,
+            remoteItems: remoteItems,
+            options: SyncRuleCreationPolicy.plannerOptions(
+                mode: .realtimeUpload,
+                remoteProtocol: server.protocol_
             )
-            return false
+        )
+
+        if !plan.conflicts.isEmpty {
+            appState.alertItem = AlertItem(
+                title: "初始同步计划存在冲突",
+                message: conflictMessage(for: plan)
+            )
+            return nil
         }
 
-        addWatcher(
+        if initialSyncPolicy == .futureOnly {
+            let shared = SyncRuleCreationPolicy
+                .existingRemoteContentBlockingFutureOnlyCreation(in: plan)
+            if !shared.isEmpty {
+                let shown = shared.prefix(8).map(\.relativePath).joined(separator: "、")
+                let more = shared.count > 8 ? " 等 \(shared.count) 个" : ""
+                appState.alertItem = AlertItem(
+                    title: "远程目录已存在同路径内容",
+                    message: "远程路径「\(remotePath)」中已存在与本地同路径的文件或文件夹：\(shown)\(more)。如要创建规则，请选择“先上传缺失和较新的本地文件”，或改用空的专用远程目录。"
+                )
+                return nil
+            }
+        }
+
+        return PreparedSyncRule(
             localPath: localPath,
             localPathBookmark: localPathBookmark,
             remotePath: remotePath,
-            excludePatterns: excludePatterns
+            excludePatterns: excludePatterns,
+            mode: mode,
+            initialSyncPolicy: initialSyncPolicy,
+            mirrorDeleteEnabled: false,
+            plan: plan
         )
-        return true
+    }
+
+    fileprivate func commitPreparedWatcher(_ prepared: PreparedSyncRule) async {
+        addWatcher(
+            localPath: prepared.localPath,
+            localPathBookmark: prepared.localPathBookmark,
+            remotePath: prepared.remotePath,
+            excludePatterns: prepared.excludePatterns,
+            mode: prepared.mode,
+            initialSyncPolicy: prepared.initialSyncPolicy,
+            mirrorDeleteEnabled: prepared.mirrorDeleteEnabled
+        )
+
+        guard prepared.initialSyncPolicy == .uploadMissingAndNewer else { return }
+        await appState.createRemoteDirectories(
+            server: server,
+            remoteRoot: prepared.remotePath,
+            relativeDirectories: prepared.plan.createDirectories.map(\.relativePath)
+        )
+        let uploadActions = prepared.plan.uploads + prepared.plan.overwrites
+        for action in uploadActions {
+            guard let local = action.local, !local.isDirectory else { continue }
+            await appState.enqueue(
+                server: server,
+                direction: .upload,
+                localURL: URL(fileURLWithPath: prepared.localPath)
+                    .appendingPathComponent(action.relativePath),
+                remotePath: remotePath(root: prepared.remotePath, relative: action.relativePath),
+                isAutoSync: true
+            )
+        }
+    }
+
+    private func localSnapshot(
+        localPath: String,
+        matcher: ExclusionMatcher,
+        maxItems: Int = 10_000
+    ) throws -> [SyncSnapshotItem] {
+        let rootURL = URL(fileURLWithPath: localPath, isDirectory: true).standardizedFileURL
+        let rootPath = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+        let keys: [URLResourceKey] = [
+            .isDirectoryKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .fileSizeKey,
+            .contentModificationDateKey
+        ]
+        guard let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: keys,
+            options: [.skipsPackageDescendants]
+        ) else {
+            throw FTPError.fileNotFound(localPath)
+        }
+
+        var snapshot: [SyncSnapshotItem] = []
+        for case let fileURL as URL in enumerator {
+            let path = fileURL.standardizedFileURL.path
+            guard path.hasPrefix(rootPath) else { continue }
+            let relativePath = String(path.dropFirst(rootPath.count))
+            guard !relativePath.isEmpty else { continue }
+
+            let values = try? fileURL.resourceValues(forKeys: Set(keys))
+            let isDirectory = values?.isDirectory == true
+            if values?.isSymbolicLink == true {
+                if isDirectory { enumerator.skipDescendants() }
+                continue
+            }
+            if matcher.shouldExclude(relativePath) {
+                if isDirectory { enumerator.skipDescendants() }
+                continue
+            }
+            if isDirectory {
+                snapshot.append(
+                    SyncSnapshotItem(relativePath: relativePath, isDirectory: true)
+                )
+            } else if values?.isRegularFile == true {
+                snapshot.append(
+                    SyncSnapshotItem(
+                        relativePath: relativePath,
+                        isDirectory: false,
+                        size: Int64(values?.fileSize ?? 0),
+                        modifiedDate: values?.contentModificationDate
+                    )
+                )
+            }
+            guard snapshot.count <= maxItems else {
+                throw FTPError.unsupported("本地目录文件过多（超过 \(maxItems) 项），请缩小同步范围。")
+            }
+        }
+        return snapshot
+    }
+
+    private func conflictMessage(for plan: InitialSyncPlan) -> String {
+        let shown = plan.conflicts.prefix(8).map { conflict in
+            switch conflict.kind {
+            case .invalidRelativePath:
+                return "\(conflict.relativePath)：路径无效"
+            case .caseFoldCollision:
+                return "\(conflict.relativePath)：大小写冲突"
+            case .typeMismatch:
+                return "\(conflict.relativePath)：文件/文件夹类型不一致"
+            case .remoteNewer:
+                return "\(conflict.relativePath)：远程更新，未覆盖"
+            case .timestampUncertain:
+                return "\(conflict.relativePath)：时间戳不可靠，无法安全判断"
+            }
+        }.joined(separator: "\n")
+        let more = plan.conflicts.count > 8 ? "\n等 \(plan.conflicts.count) 个冲突。" : ""
+        return "已停止创建同步规则。请先处理以下冲突：\n\(shown)\(more)"
+    }
+
+    private func remotePath(root: String, relative: String) -> String {
+        let cleanRoot = root.hasSuffix("/") ? String(root.dropLast()) : root
+        let cleanRelative = relative.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return cleanRoot.isEmpty ? "/" + cleanRelative : cleanRoot + "/" + cleanRelative
     }
 
     // MARK: - Toggle active
@@ -418,8 +586,14 @@ struct RealtimeSyncView: View {
     @State private var localPathBookmark: Data?
     @State private var remotePath = ""
     @State private var excludeText = SyncWatcher.defaultExcludePatterns.joined(separator: "\n")
+    @State private var syncMode: SyncRuleMode = .realtimeUpload
+    @State private var initialSyncPolicy: SyncInitialSyncPolicy = .futureOnly
     @State private var acknowledged = false
+    @State private var mirrorDeleteAcknowledged = false
+    @State private var mirrorDedicatedRootAcknowledged = false
     @State private var showConfirm = false
+    @State private var showPlanConfirm = false
+    @State private var pendingCreation: PreparedSyncRule?
 
     var body: some View {
         if !vm.hasFullAccess {
@@ -576,6 +750,17 @@ struct RealtimeSyncView: View {
         .sheet(isPresented: $vm.showAddSheet) { addSheet }
     }
 
+    private var baseAcknowledgementText: String {
+        if syncMode == .realtimeUpload {
+            return "我已了解：创建时会先检查现有文件，有冲突会停止创建。"
+        }
+        return "我已了解：镜像模式未来可能删除远程文件。"
+    }
+
+    private var canCreateSelectedMode: Bool {
+        syncMode == .realtimeUpload
+    }
+
     // MARK: - Empty state
     var emptyState: some View {
         VStack(spacing: 14) {
@@ -636,6 +821,42 @@ struct RealtimeSyncView: View {
                 TextField("/var/www/html", text: $remotePath).textFieldStyle(.roundedBorder)
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("同步模式").font(.caption).foregroundColor(.secondary)
+                Picker("", selection: $syncMode) {
+                    Text(SyncRuleMode.realtimeUpload.displayName).tag(SyncRuleMode.realtimeUpload)
+                    Text(SyncRuleMode.oneWayMirror.displayName).tag(SyncRuleMode.oneWayMirror)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                if syncMode == .realtimeUpload {
+                    Picker("创建时", selection: $initialSyncPolicy) {
+                        ForEach(SyncInitialSyncPolicy.allCases) { policy in
+                            Text(policy.displayName).tag(policy)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .font(.caption)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("镜像模式会在后续安全步骤开放创建；当前暂不创建实际规则。")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                        Toggle(isOn: $mirrorDeleteAcknowledged) {
+                            Text("我理解：镜像模式中本地删除会删除远程对应文件。")
+                                .font(.caption)
+                        }
+                        .toggleStyle(.checkbox)
+                        Toggle(isOn: $mirrorDedicatedRootAcknowledged) {
+                            Text("我确认远程目录是专用于此规则的目录。")
+                                .font(.caption)
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+            }
+
             // Exclude patterns
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -654,9 +875,15 @@ struct RealtimeSyncView: View {
 
             // Honest behavior + risk disclosure
             VStack(alignment: .leading, spacing: 5) {
-                Label("本规则仅上传：本地文件保存后会上传到远程。", systemImage: "arrow.up.circle")
-                Label("不会删除远程文件；空文件夹与文件夹改名不会被同步。", systemImage: "trash.slash")
-                Label("远程已存在的同名文件可能被覆盖（远程更新的文件会自动跳过并提示）。", systemImage: "exclamationmark.triangle")
+                if syncMode == .realtimeUpload {
+                    Label("本规则仅上传：本地文件保存后会上传到远程。", systemImage: "arrow.up.circle")
+                    Label("不会删除远程文件；空文件夹与文件夹改名不会被实时同步。", systemImage: "trash.slash")
+                    Label("创建时会先生成 dry-run 计划；有冲突会停止创建。", systemImage: "exclamationmark.triangle")
+                } else {
+                    Label("单向镜像会让本地作为唯一源。", systemImage: "arrow.right.circle")
+                    Label("本地删除未来会删除远程对应文件。", systemImage: "trash")
+                    Label("删除执行需要远程回收站与 marker 校验，当前不会创建实际镜像规则。", systemImage: "exclamationmark.triangle")
+                }
             }
             .font(.caption2)
             .foregroundColor(.secondary)
@@ -665,7 +892,7 @@ struct RealtimeSyncView: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
 
             Toggle(isOn: $acknowledged) {
-                Text("我已了解：远程同名文件可能被覆盖，且本规则不会删除远程文件。")
+                Text(baseAcknowledgementText)
                     .font(.caption)
             }
             .toggleStyle(.checkbox)
@@ -682,37 +909,103 @@ struct RealtimeSyncView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(
                     localPath.isEmpty || localPathBookmark == nil ||
-                    remotePath.isEmpty || !acknowledged || vm.isValidating
+                    remotePath.isEmpty || !acknowledged || !canCreateSelectedMode || vm.isValidating
                 )
             }
         }
         .padding(24)
-        .frame(width: 520, height: 560)
+        .frame(width: 560, height: 660)
         .alert("再次确认同步规则", isPresented: $showConfirm) {
             Button("取消", role: .cancel) {}
-            Button("确认创建") {
+            Button("生成计划") {
                 let patterns = excludeText.split(separator: "\n")
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }
                 guard let bookmark = localPathBookmark else { return }
                 Task {
-                    let ok = await vm.validateAndAddWatcher(
+                    if let prepared = await vm.prepareWatcher(
                         localPath: localPath,
                         localPathBookmark: bookmark,
                         remotePath: remotePath,
-                        excludePatterns: patterns
-                    )
-                    if ok {
-                        vm.showAddSheet = false
-                        localPath = ""; localPathBookmark = nil
-                        remotePath = ""; acknowledged = false
-                        excludeText = SyncWatcher.defaultExcludePatterns.joined(separator: "\n")
+                        excludePatterns: patterns,
+                        mode: syncMode,
+                        initialSyncPolicy: initialSyncPolicy
+                    ) {
+                        pendingCreation = prepared
+                        showPlanConfirm = true
                     }
                 }
             }
         } message: {
-            Text("将监控本地：\(localPath)\n上传到远程：\(remotePath)\n\n远程同名文件可能被覆盖；确认这两个路径无误？")
+            Text(confirmMessage)
         }
+        .alert("确认同步计划", isPresented: $showPlanConfirm) {
+            Button("取消", role: .cancel) {
+                pendingCreation = nil
+            }
+            Button("创建规则") {
+                guard let prepared = pendingCreation else { return }
+                Task {
+                    await vm.commitPreparedWatcher(prepared)
+                    resetAddSheet()
+                }
+            }
+        } message: {
+            Text(planMessage)
+        }
+    }
+
+    private var confirmMessage: String {
+        var lines = [
+            "本地：\(localPath)",
+            "远程：\(remotePath)",
+            "模式：\(syncMode.displayName)"
+        ]
+        if syncMode == .realtimeUpload {
+            lines.append("创建时：\(initialSyncPolicy.displayName)")
+        } else {
+            lines.append("远程删除：已要求双重确认")
+        }
+        lines.append("")
+        lines.append("下一步只生成 dry-run 计划；有冲突会停止创建。")
+        return lines.joined(separator: "\n")
+    }
+
+    private var planMessage: String {
+        guard let prepared = pendingCreation else { return "" }
+        let plan = prepared.plan
+        var lines = [
+            "将创建规则：\(prepared.mode.displayName)",
+            "创建目录：\(plan.createDirectories.count)",
+            "上传新文件：\(plan.uploads.count)",
+            "覆盖远程文件：\(plan.overwrites.count)"
+        ]
+        if prepared.mode == .oneWayMirror {
+            lines.append("计划删除远程：\(plan.remoteDeletes.count)")
+        }
+        lines.append("跳过：\(plan.skipped.count)")
+        if prepared.initialSyncPolicy == .uploadMissingAndNewer {
+            lines.append("")
+            lines.append("确认后会把上传任务加入传输队列。")
+        } else {
+            lines.append("")
+            lines.append("确认后只监控后续修改，不上传现有文件。")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func resetAddSheet() {
+        vm.showAddSheet = false
+        localPath = ""
+        localPathBookmark = nil
+        remotePath = ""
+        syncMode = .realtimeUpload
+        initialSyncPolicy = .futureOnly
+        acknowledged = false
+        mirrorDeleteAcknowledged = false
+        mirrorDedicatedRootAcknowledged = false
+        pendingCreation = nil
+        excludeText = SyncWatcher.defaultExcludePatterns.joined(separator: "\n")
     }
 }
 

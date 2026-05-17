@@ -844,3 +844,32 @@ public enum InitialSyncPlanner {
         path.split(separator: "/").count
     }
 }
+
+public enum SyncRuleCreationPolicy {
+    public static func plannerOptions(
+        mode: SyncRuleMode,
+        remoteProtocol: ConnectionProtocol,
+        mirrorDeleteAcknowledged: Bool = false
+    ) -> InitialSyncPlannerOptions {
+        InitialSyncPlannerOptions(
+            mode: mode == .oneWayMirror
+                ? .oneWayMirror(deleteRemote: mirrorDeleteAcknowledged)
+                : .realtimeUpload,
+            remoteTimestampQuality: remoteTimestampQuality(for: remoteProtocol)
+        )
+    }
+
+    public static func remoteTimestampQuality(
+        for remoteProtocol: ConnectionProtocol
+    ) -> RemoteTimestampQuality {
+        remoteProtocol == .sftp ? .reliable : .unreliable
+    }
+
+    public static func existingRemoteContentBlockingFutureOnlyCreation(
+        in plan: InitialSyncPlan
+    ) -> [InitialSyncPlanAction] {
+        (plan.overwrites + plan.skipped).filter {
+            $0.kind == .overwriteRemoteFile || $0.kind == .skipIdentical
+        }
+    }
+}

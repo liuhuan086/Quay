@@ -298,6 +298,34 @@ public enum ConnectionState {
 }
 
 // MARK: - Sync Watcher
+public enum SyncRuleMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case realtimeUpload
+    case oneWayMirror
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .realtimeUpload: return "实时上传"
+        case .oneWayMirror: return "单向镜像"
+        }
+    }
+}
+
+public enum SyncInitialSyncPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
+    case futureOnly
+    case uploadMissingAndNewer
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .futureOnly: return "只同步后续修改"
+        case .uploadMissingAndNewer: return "先上传缺失和较新的本地文件"
+        }
+    }
+}
+
 public struct SyncWatcher: Identifiable, Codable, Sendable {
     public let id: UUID
     public let serverID: UUID
@@ -306,6 +334,9 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
     public var localPathBookmark: Data?
     public var remotePath: String
     public var excludePatterns: [String]
+    public var mode: SyncRuleMode
+    public var initialSyncPolicy: SyncInitialSyncPolicy
+    public var mirrorDeleteEnabled: Bool
     public var isActive: Bool
     public var lastSyncAt: Date?
     public var totalSynced: Int
@@ -329,4 +360,70 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         ".env", ".env.*", ".netrc", ".npmrc", ".pypirc",
         "*.keychain", "*.keychain-db", "Keychains"
     ]
+
+    public init(
+        id: UUID,
+        serverID: UUID,
+        serverName: String,
+        localPath: String,
+        localPathBookmark: Data?,
+        remotePath: String,
+        excludePatterns: [String],
+        mode: SyncRuleMode = .realtimeUpload,
+        initialSyncPolicy: SyncInitialSyncPolicy = .futureOnly,
+        mirrorDeleteEnabled: Bool = false,
+        isActive: Bool,
+        lastSyncAt: Date?,
+        totalSynced: Int
+    ) {
+        self.id = id
+        self.serverID = serverID
+        self.serverName = serverName
+        self.localPath = localPath
+        self.localPathBookmark = localPathBookmark
+        self.remotePath = remotePath
+        self.excludePatterns = excludePatterns
+        self.mode = mode
+        self.initialSyncPolicy = initialSyncPolicy
+        self.mirrorDeleteEnabled = mirrorDeleteEnabled
+        self.isActive = isActive
+        self.lastSyncAt = lastSyncAt
+        self.totalSynced = totalSynced
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case serverID
+        case serverName
+        case localPath
+        case localPathBookmark
+        case remotePath
+        case excludePatterns
+        case mode
+        case initialSyncPolicy
+        case mirrorDeleteEnabled
+        case isActive
+        case lastSyncAt
+        case totalSynced
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.serverID = try c.decode(UUID.self, forKey: .serverID)
+        self.serverName = try c.decode(String.self, forKey: .serverName)
+        self.localPath = try c.decode(String.self, forKey: .localPath)
+        self.localPathBookmark = try c.decodeIfPresent(Data.self, forKey: .localPathBookmark)
+        self.remotePath = try c.decode(String.self, forKey: .remotePath)
+        self.excludePatterns = try c.decode([String].self, forKey: .excludePatterns)
+        self.mode = try c.decodeIfPresent(SyncRuleMode.self, forKey: .mode) ?? .realtimeUpload
+        self.initialSyncPolicy = try c.decodeIfPresent(
+            SyncInitialSyncPolicy.self,
+            forKey: .initialSyncPolicy
+        ) ?? .futureOnly
+        self.mirrorDeleteEnabled = try c.decodeIfPresent(Bool.self, forKey: .mirrorDeleteEnabled) ?? false
+        self.isActive = try c.decode(Bool.self, forKey: .isActive)
+        self.lastSyncAt = try c.decodeIfPresent(Date.self, forKey: .lastSyncAt)
+        self.totalSynced = try c.decode(Int.self, forKey: .totalSynced)
+    }
 }

@@ -455,6 +455,100 @@ final class InitialSyncPlannerTests: XCTestCase {
     }
 }
 
+final class SyncRuleCreationPolicyTests: XCTestCase {
+
+    func test_futureOnlyBlocksOnlySharedLocalRemoteContent() {
+        var plan = InitialSyncPlan()
+        plan.uploads = [
+            InitialSyncPlanAction(kind: .uploadNewFile, relativePath: "local-only.txt")
+        ]
+        plan.overwrites = [
+            InitialSyncPlanAction(kind: .overwriteRemoteFile, relativePath: "changed.txt")
+        ]
+        plan.skipped = [
+            InitialSyncPlanAction(kind: .skipIdentical, relativePath: "same.txt"),
+            InitialSyncPlanAction(kind: .skipRemoteOnly, relativePath: "remote-only.txt")
+        ]
+
+        let blocking = SyncRuleCreationPolicy
+            .existingRemoteContentBlockingFutureOnlyCreation(in: plan)
+
+        XCTAssertEqual(blocking.map(\.relativePath), ["changed.txt", "same.txt"])
+    }
+
+    func test_remoteTimestampQualityMatchesProtocolCapabilities() {
+        XCTAssertEqual(SyncRuleCreationPolicy.remoteTimestampQuality(for: .sftp), .reliable)
+        XCTAssertEqual(SyncRuleCreationPolicy.remoteTimestampQuality(for: .ftp), .unreliable)
+        XCTAssertEqual(SyncRuleCreationPolicy.remoteTimestampQuality(for: .ftps), .unreliable)
+    }
+
+    func test_plannerOptionsPreserveMirrorDeleteAcknowledgement() {
+        let uploadOptions = SyncRuleCreationPolicy.plannerOptions(
+            mode: .realtimeUpload,
+            remoteProtocol: .sftp
+        )
+        XCTAssertEqual(uploadOptions.mode, .realtimeUpload)
+        XCTAssertEqual(uploadOptions.remoteTimestampQuality, .reliable)
+
+        let mirrorOptions = SyncRuleCreationPolicy.plannerOptions(
+            mode: .oneWayMirror,
+            remoteProtocol: .ftp,
+            mirrorDeleteAcknowledged: true
+        )
+        XCTAssertEqual(mirrorOptions.mode, .oneWayMirror(deleteRemote: true))
+        XCTAssertEqual(mirrorOptions.remoteTimestampQuality, .unreliable)
+    }
+}
+
+final class SyncWatcherCodingTests: XCTestCase {
+
+    func test_legacyWatcherDecodesWithSafeDefaults() throws {
+        let id = UUID()
+        let serverID = UUID()
+        let json = """
+        [{
+          "id": "\(id.uuidString)",
+          "serverID": "\(serverID.uuidString)",
+          "serverName": "Mac",
+          "localPath": "/Users/alice/project",
+          "remotePath": "/home/alice/project",
+          "excludePatterns": [],
+          "isActive": true,
+          "totalSynced": 0
+        }]
+        """.data(using: .utf8)!
+
+        let watchers = try JSONDecoder().decode([SyncWatcher].self, from: json)
+        XCTAssertEqual(watchers.first?.mode, .realtimeUpload)
+        XCTAssertEqual(watchers.first?.initialSyncPolicy, .futureOnly)
+        XCTAssertEqual(watchers.first?.mirrorDeleteEnabled, false)
+    }
+
+    func test_watcherModeRoundTrips() throws {
+        let watcher = SyncWatcher(
+            id: UUID(),
+            serverID: UUID(),
+            serverName: "Mac",
+            localPath: "/Users/alice/project",
+            localPathBookmark: nil,
+            remotePath: "/home/alice/project",
+            excludePatterns: [],
+            mode: .oneWayMirror,
+            initialSyncPolicy: .uploadMissingAndNewer,
+            mirrorDeleteEnabled: true,
+            isActive: true,
+            lastSyncAt: nil,
+            totalSynced: 0
+        )
+
+        let data = try JSONEncoder().encode([watcher])
+        let decoded = try JSONDecoder().decode([SyncWatcher].self, from: data)
+        XCTAssertEqual(decoded.first?.mode, .oneWayMirror)
+        XCTAssertEqual(decoded.first?.initialSyncPolicy, .uploadMissingAndNewer)
+        XCTAssertEqual(decoded.first?.mirrorDeleteEnabled, true)
+    }
+}
+
 final class MandatorySecretExcludeTests: XCTestCase {
 
     /// Even with an empty user pattern set, the mandatory layer must still

@@ -249,8 +249,77 @@ final class AppState: ObservableObject {
         do {
             let items = try await client.listDirectory(path)
             return Set(items.map { $0.name })
-        } catch FTPError.fileNotFound(_) {
+        } catch where Self.isRemoteMissingDirectoryError(error) {
             return []
+        }
+    }
+
+    func remoteSnapshot(
+        server: ServerConfig,
+        path: String,
+        matcher: ExclusionMatcher,
+        maxItems: Int = 10_000
+    ) async throws -> [SyncSnapshotItem] {
+        let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+        let client = try await pool.borrowClient(password: server.password)
+        defer { Task { await pool.returnClient(client) } }
+
+        var snapshot: [SyncSnapshotItem] = []
+
+        func walk(remotePath: String, relativePrefix: String) async throws {
+            let items: [RemoteFileItem]
+            do {
+                items = try await client.listDirectory(remotePath)
+            } catch where relativePrefix.isEmpty && Self.isRemoteMissingDirectoryError(error) {
+                return
+            }
+
+            for item in items where item.name != "." && item.name != ".." {
+                let relativePath = relativePrefix.isEmpty
+                    ? item.name
+                    : relativePrefix + "/" + item.name
+                if matcher.shouldExclude(relativePath) { continue }
+                snapshot.append(
+                    SyncSnapshotItem(
+                        relativePath: relativePath,
+                        isDirectory: item.isDirectory,
+                        size: item.size,
+                        modifiedDate: item.modifiedDate
+                    )
+                )
+                guard snapshot.count <= maxItems else {
+                    throw FTPError.unsupported("远程目录文件过多（超过 \(maxItems) 项），请缩小同步范围。")
+                }
+                if item.isDirectory {
+                    try await walk(remotePath: item.path, relativePrefix: relativePath)
+                }
+            }
+        }
+
+        try await walk(remotePath: path, relativePrefix: "")
+        return snapshot
+    }
+
+    func createRemoteDirectories(
+        server: ServerConfig,
+        remoteRoot: String,
+        relativeDirectories: [String]
+    ) async {
+        guard !relativeDirectories.isEmpty else { return }
+        do {
+            let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+            let client = try await pool.borrowClient(password: server.password)
+            defer { Task { await pool.returnClient(client) } }
+            for relative in relativeDirectories.sorted(by: Self.pathDepthAscending) {
+                do {
+                    try await client.createDirectory(Self.joinRemotePath(root: remoteRoot, relative: relative))
+                } catch {
+                    // Existing directories commonly surface as errors. File uploads will still
+                    // report real permission or missing-parent failures through TransferEngine.
+                }
+            }
+        } catch {
+            showError(error)
         }
     }
 
@@ -270,6 +339,30 @@ final class AppState: ObservableObject {
         } catch {
             return nil
         }
+    }
+
+    private static func isRemoteMissingDirectoryError(_ error: Error) -> Bool {
+        if case FTPError.fileNotFound = error { return true }
+        guard case FTPError.badResponse(let message) = error else { return false }
+        let lower = message.lowercased()
+        return lower.contains("550") && (
+            lower.contains("not found") ||
+            lower.contains("no such") ||
+            lower.contains("not exist") ||
+            lower.contains("failed to change directory")
+        )
+    }
+
+    private static func joinRemotePath(root: String, relative: String) -> String {
+        let cleanRoot = root.hasSuffix("/") ? String(root.dropLast()) : root
+        let cleanRelative = relative.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return cleanRoot.isEmpty ? "/" + cleanRelative : cleanRoot + "/" + cleanRelative
+    }
+
+    private static func pathDepthAscending(_ lhs: String, _ rhs: String) -> Bool {
+        let leftDepth = lhs.split(separator: "/").count
+        let rightDepth = rhs.split(separator: "/").count
+        return leftDepth == rightDepth ? lhs < rhs : leftDepth < rightDepth
     }
 
     // MARK: - Enqueue Transfer

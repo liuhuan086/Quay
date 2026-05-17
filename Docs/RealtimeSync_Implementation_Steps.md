@@ -64,6 +64,14 @@ Acceptance:
 
 ## Step 3: Rule Creation UX
 
+Status:
+
+- Realtime upload rules now generate a recursive dry-run plan before creation.
+- Future-only rules stop when the remote already has same-relative-path content.
+- "Upload missing and newer local files now" enqueues uploads only after plan confirmation.
+- Mirror mode is visible with deletion acknowledgements, but actual rule creation remains gated until managed-root marker, trash, and delete thresholds are implemented.
+- Legacy persisted watchers decode with safe defaults for new mode fields.
+
 Scope:
 
 - Add sync mode selection: realtime upload and one-way mirror.
