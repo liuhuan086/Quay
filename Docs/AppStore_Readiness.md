@@ -2,14 +2,14 @@
 
 **审阅人视角**：iOS/macOS 应用架构师 + App Review 经验 + 独立开发者商业化角度
 **版本**：v2.0.0（构建产物：`build/SwiftFTP_v2.0.0.dmg`）
-**评估日期**：2026-05-09（已同步当前代码状态）
-**仓库规模**：约 5k 行 Swift（含 47 个单测） / 单人开发
+**评估日期**：2026-05-17（已同步当前代码状态）
+**仓库规模**：SwiftUI + Swift 6 macOS app（含 111 个单测） / 单人开发
 
 ---
 
 ## 0. 一句话结论
 
-**可以做成「小而美」的付费 FTP/SFTP 客户端，当前代码已经补上了一批早期阻断项：App Sandbox、Keychain 密码存储、SFTP TOFU、StoreKit 2 基础付费、首次引导、About/致谢、SFTP 流式上传与续传。** 距离 MAS 审核通过仍建议预留 **1–2 周** 集中收尾，主要卡点变成**发布签名/ASC 物料、真实协议集成测试、沙盒文件访问边界、FTPS 证书例外策略细化**。
+**可以做成「小而美」的付费 FTP/SFTP 客户端，当前代码已经补上了一批早期阻断项：App Sandbox、Keychain 密码存储、SFTP TOFU、StoreKit 2 基础付费、首次引导、About/致谢、SFTP 流式上传与续传，以及实时同步 / 单向镜像的 dry-run、marker、canary、回收站隔离、删除阈值和手动远端漂移检测。** 距离 MAS 审核通过仍建议预留 **1–2 周** 集中收尾，主要卡点变成**发布签名/ASC 物料、真实协议集成测试、沙盒文件访问边界、FTPS 证书例外策略细化**。
 
 如果只走 **Developer ID + DMG 直售**（绕开 MAS），当前功能已经接近可打包试卖，仍需要公证、Sparkle/更新策略、隐私政策和真实服务器冒烟验证。
 
@@ -69,7 +69,7 @@
 | 自研 `ContinuationBox`（NSLock + 一次性 resume） | `FTPClient.swift:474` | 解决 `NWConnection.stateUpdateHandler` 多次回调导致的 double-resume 崩溃，写得规范 |
 | `actor ConnectionPool` + 借/还语义 + waiter 队列 | `ConnectionPool.swift` | 处理 actor reentrancy 的注释清晰，工程质量高 |
 | 错误友好化映射 `FTPError.friendly()` | `AnyFTPClient.swift:107` | 把 NWError / POSIX / NIO / Cocoa 错误统一中文化，体验比绝大多数 FTP 软件好 |
-| FSEvents + 排除规则（节点/git/build 等） | `FSEventWatcher.swift`、`Entities.swift:249` | 实时同步默认排除得体 |
+| FSEvents + 排除规则（节点/git/build 等） | `FSEventWatcher.swift`、`Entities.swift:249` | 实时同步默认排除得体，镜像删除有回收站隔离与阈值 |
 | Keychain-backed credential storage | `ServerRepository.swift`、`KeychainManager.swift` | `ServerConfig.password` 是运行时字段，编码时不落盘，支持旧 JSON 明文迁移 |
 | SFTP TOFU host-key 校验 | `SFTPClient.swift`、`KnownHostsManager` | 首次信任后保存 SHA-256 指纹，后续不一致会抛 `hostKeyMismatch` |
 | SFTP/FTP 可取消传输与 SFTP 续传 | `SFTPClient.swift`、`FTPClient.swift`、`TransferEngine.swift` | 大文件流式读写，暂停/取消更及时，SFTP download 已按 offset 恢复 |
@@ -87,9 +87,9 @@
 
 ### 2.3 测试覆盖
 
-- 现有 47 个单测，覆盖 `Entities` / `TransferTask` / `Keychain` / `Repository` / `ExclusionMatcher` / `FTPError` / `KnownHostsManager` / `ContinuationBox` / `ConnectionPool` / security-scoped bookmark 基础回归。
+- 现有 111 个单测，覆盖 `Entities` / `TransferTask` / `Keychain` / `Repository` / `ExclusionMatcher` / `FTPError` / `KnownHostsManager` / `ContinuationBox` / `ConnectionPool` / security-scoped bookmark / 同步路径安全 / 初始同步 planner / mirror marker + canary + trash path / 删除阈值 / 手动远端漂移检测。
 - **缺失**：FTPClient 协议解析（MLSD/LIST/PASV/多行响应）单测、TransferEngine 状态机测试、UI 测试、真实 FTP/SFTP 端到端测试（推荐用 Docker pure-ftpd + openssh-server 起本地服务器跑集成测）。
-- 验证命令：`xcodebuild test -project SwiftFTP.xcodeproj -scheme SwiftFTP -destination 'platform=macOS' -derivedDataPath /private/tmp/SwiftFTPDerivedData -clonedSourcePackagesDirPath /private/tmp/SwiftFTPSourcePackages CODE_SIGNING_ALLOWED=NO`，当前 47 tests 通过。
+- 验证命令：`xcodebuild test -project SwiftFTP.xcodeproj -scheme SwiftFTP -destination 'platform=macOS' -derivedDataPath /private/tmp/SwiftFTPDerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`，当前 111 tests 通过。
 
 ---
 
@@ -238,6 +238,7 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 - [ ] **A7: StoreKit 2 Sandbox 验证**（购买/恢复/失败态）
 - [x] **首次启动引导**（Onboarding 已有）
 - [x] **License/About 面板**（含致谢 JSON）
+- [x] **实时同步 / 单向镜像安全闸**（dry-run、marker、canary、回收站隔离、删除阈值、手动远端漂移检测）
 - [ ] **真实 FTP/SFTP 集成测试与 MAS 沙盒手测**（文件选择、拖放、同步、Keychain、known_hosts）
 
 ### Phase 2 — 上架后体验提升（4–6 周）

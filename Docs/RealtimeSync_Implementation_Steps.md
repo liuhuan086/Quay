@@ -69,7 +69,7 @@ Status:
 - Realtime upload rules now generate a recursive dry-run plan before creation.
 - Future-only rules stop when the remote already has same-relative-path content.
 - "Upload missing and newer local files now" enqueues uploads only after plan confirmation.
-- Mirror mode is visible with deletion acknowledgements, but actual rule creation remains gated until managed-root marker, trash, and delete thresholds are implemented.
+- Mirror rules can be created after deletion acknowledgements, managed-root marker, canary verification, trash quarantine, and delete thresholds.
 - Legacy persisted watchers decode with safe defaults for new mode fields.
 
 Scope:
@@ -114,7 +114,7 @@ Status:
 
 - Marker model and validation are implemented in `ManagedMirrorRoot`.
 - AppState can write/read `.swiftftp-mirror.json`, validate it before destructive actions, and run a SwiftFTP-owned create/rename/delete canary.
-- Mirror execution is still not enabled; these guards are infrastructure for Step 6.
+- Mirror execution now uses these guards before every quarantine delete.
 
 Scope:
 
@@ -172,6 +172,12 @@ Acceptance:
 - B-side drift never writes back to A.
 
 ## Step 8: Release Gate
+
+Status:
+
+- Release gate verified on 2026-05-17 with unit tests and Debug build using code signing disabled for local CI-style validation.
+- Realtime sync documentation now matches shipped mirror deletion and manual remote drift behavior.
+- App Store readiness blockers remain external/release-operation items: Apple Developer team/signing, App Store Connect assets, public privacy policy URL, StoreKit sandbox purchase flow, and real FTP/SFTP integration + sandbox manual tests.
 
 Scope:
 
