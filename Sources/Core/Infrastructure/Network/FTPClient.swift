@@ -449,7 +449,10 @@ public final class FTPClient: AnyFTPClient {
                 case "type":   isDir = kv[1].lowercased().contains("dir")
                 case "size":   size  = Int64(kv[1]) ?? 0
                 case "modify":
-                    let f = DateFormatter(); f.dateFormat = "yyyyMMddHHmmss"
+                    let f = DateFormatter()
+                    f.locale = Locale(identifier: "en_US_POSIX")
+                    f.timeZone = TimeZone(secondsFromGMT: 0)
+                    f.dateFormat = "yyyyMMddHHmmss"
                     date = f.date(from: String(kv[1]))
                 default: break
                 }

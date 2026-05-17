@@ -30,6 +30,18 @@ final class SyncPathValidatorTests: XCTestCase {
         )
     }
 
+    func test_forbiddenLocalRoot_sensitiveHomeDescendants() {
+        XCTAssertEqual(
+            SyncPathValidator.localRootStaticError("/Users/alice/Library/Application Support/App"),
+            .forbiddenLocalRoot("/Users/alice/Library/Application Support/App")
+        )
+        XCTAssertEqual(
+            SyncPathValidator.localRootStaticError("/Users/alice/.aws/profiles"),
+            .forbiddenLocalRoot("/Users/alice/.aws/profiles")
+        )
+        XCTAssertNil(SyncPathValidator.localRootStaticError("/Users/alice/Downloads/project"))
+    }
+
     func test_localTooShallow() {
         XCTAssertEqual(SyncPathValidator.localRootStaticError("/"), .localTooShallow("/"))
         XCTAssertEqual(SyncPathValidator.localRootStaticError("/tmp"), .localTooShallow("/tmp"))
@@ -60,14 +72,63 @@ final class SyncPathValidatorTests: XCTestCase {
             SyncPathValidator.remoteRootError("/etc/nginx/conf.d"),
             .forbiddenRemoteRoot("/etc/nginx/conf.d")
         )
+        XCTAssertEqual(
+            SyncPathValidator.remoteRootError("/usr/local/bin"),
+            .forbiddenRemoteRoot("/usr/local/bin")
+        )
+        XCTAssertEqual(
+            SyncPathValidator.remoteRootError("/opt/app/bin"),
+            .forbiddenRemoteRoot("/opt/app/bin")
+        )
     }
 
     func test_forbiddenRemoteRoot_windows() {
-        XCTAssertEqual(SyncPathValidator.remoteRootError("C:\\"), .forbiddenRemoteRoot("C:\\"))
+        XCTAssertEqual(SyncPathValidator.remoteRootError("C:\\"), .forbiddenRemoteRoot("C:/"))
         XCTAssertEqual(
             SyncPathValidator.remoteRootError("C:\\Windows\\System32"),
-            .forbiddenRemoteRoot("C:\\Windows\\System32")
+            .forbiddenRemoteRoot("C:/Windows/System32")
         )
+    }
+
+    func test_forbiddenRemoteRoot_homeKnownFolders() {
+        XCTAssertEqual(
+            SyncPathValidator.remoteRootError("/Users/alice/Downloads"),
+            .forbiddenRemoteRoot("/Users/alice/Downloads")
+        )
+        XCTAssertEqual(
+            SyncPathValidator.remoteRootError("/home/alice/.ssh/configs"),
+            .forbiddenRemoteRoot("/home/alice/.ssh/configs")
+        )
+        XCTAssertNil(SyncPathValidator.remoteRootError("/Users/alice/Downloads/project"))
+        XCTAssertNil(SyncPathValidator.remoteRootError("/home/alice/project"))
+    }
+
+    func test_forbiddenRemoteRoot_windowsKnownFolders() {
+        XCTAssertEqual(
+            SyncPathValidator.remoteRootError("C:\\Users\\Alice"),
+            .forbiddenRemoteRoot("C:/Users/Alice")
+        )
+        XCTAssertEqual(
+            SyncPathValidator.remoteRootError("C:\\Users\\Alice\\Downloads"),
+            .forbiddenRemoteRoot("C:/Users/Alice/Downloads")
+        )
+        XCTAssertEqual(
+            SyncPathValidator.remoteRootError("C:\\Users\\Alice\\AppData\\Roaming"),
+            .forbiddenRemoteRoot("C:/Users/Alice/AppData/Roaming")
+        )
+        XCTAssertNil(SyncPathValidator.remoteRootError("C:\\Users\\Alice\\Downloads\\project"))
+    }
+
+    func test_remoteCanonicalPath_resolvesDotSegments() {
+        XCTAssertEqual(
+            SyncPathValidator.canonicalRemotePath("/home/user/project/../../etc"),
+            "/home/etc"
+        )
+        XCTAssertEqual(
+            SyncPathValidator.canonicalRemotePath("/C:/Users/Alice/Downloads/../Project"),
+            "c:/users/alice/project"
+        )
+        XCTAssertNotNil(SyncPathValidator.remoteRootError("/home/user/project/../../etc"))
     }
 
     func test_remoteTooShallow() {
@@ -108,6 +169,28 @@ final class SyncPathValidatorTests: XCTestCase {
                 localPath: "/Users/a/elsewhere", remotePath: "/srv/site/deep",
                 existingRules: existing),
             .overlapsExistingRule(existing: "/srv/site")
+        )
+    }
+
+    func test_overlap_remoteCanonicalized() {
+        let existing = [(local: "/Users/a/proj", remote: "/home/a/project")]
+        XCTAssertEqual(
+            SyncPathValidator.overlapError(
+                localPath: "/Users/a/elsewhere",
+                remotePath: "/home/a/project/../project/src",
+                existingRules: existing
+            ),
+            .overlapsExistingRule(existing: "/home/a/project")
+        )
+
+        let windows = [(local: "/Users/a/windows", remote: "C:\\Users\\Alice\\Downloads\\project")]
+        XCTAssertEqual(
+            SyncPathValidator.overlapError(
+                localPath: "/Users/a/elsewhere",
+                remotePath: "C:/Users/Alice/Downloads/project/sub",
+                existingRules: windows
+            ),
+            .overlapsExistingRule(existing: "C:\\Users\\Alice\\Downloads\\project")
         )
     }
 
@@ -213,5 +296,13 @@ final class MandatorySecretExcludeTests: XCTestCase {
         XCTAssertTrue(m.shouldExclude("/proj/.env"))
         XCTAssertTrue(m.shouldExclude("/proj/private.key"))
         XCTAssertFalse(m.shouldExclude("/proj/Sources/main.swift"))
+    }
+
+    func test_mandatoryExcludes_areCaseInsensitive() {
+        let m = ExclusionMatcher(patterns: SyncWatcher.mandatorySecretExcludes)
+        XCTAssertTrue(m.shouldExclude("/proj/.SSH/ID_RSA"))
+        XCTAssertTrue(m.shouldExclude("/proj/.Env"))
+        XCTAssertTrue(m.shouldExclude("/proj/.AWS/credentials"))
+        XCTAssertTrue(m.shouldExclude("/proj/PRIVATE.KEY"))
     }
 }

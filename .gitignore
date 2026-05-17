@@ -40,7 +40,7 @@ Packages/
 *~
 
 # Local tool state
-.claude/settings.local.json
+.claude/
 
 # Logs and temporary files
 *.log

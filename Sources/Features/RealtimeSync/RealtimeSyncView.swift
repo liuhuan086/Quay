@@ -10,6 +10,13 @@ actor SyncManager {
     private var scopedURLs: [URL] = []
     var onFileChange: (@Sendable (FileChangeEvent, SyncWatcher) -> Void)?
     var onBookmarkStale: (@Sendable (SyncWatcher) -> Void)?
+    var onScanTruncated: (@Sendable (String, SyncWatcher, Int) -> Void)?
+
+    private struct DirectoryScanResult: Sendable {
+        let paths: [String]
+        let wasTruncated: Bool
+        let limit: Int
+    }
 
     func start(watchers: [SyncWatcher]) -> Set<UUID> {
         stopAll()
@@ -85,7 +92,11 @@ actor SyncManager {
                 patterns: w.excludePatterns + SyncWatcher.mandatorySecretExcludes
             )
             if event.isDirectory || isDirectory(at: event.path) {
-                for path in recentlyChangedFiles(in: event.path, matcher: matcher) {
+                let scan = recentlyChangedFiles(in: event.path, matcher: matcher)
+                if scan.wasTruncated {
+                    onScanTruncated?(event.path, w, scan.limit)
+                }
+                for path in scan.paths {
                     onFileChange?(FileChangeEvent(path: path, kind: event.kind, isDirectory: false), w)
                 }
             } else if shouldSyncFile(at: event.path, matcher: matcher) {
@@ -109,7 +120,7 @@ actor SyncManager {
 
     private func shouldSyncFile(at path: String, matcher: ExclusionMatcher) -> Bool {
         let name = (path as NSString).lastPathComponent
-        if name.hasPrefix(".__swiftftp_tmp__") { return false }
+        if isSwiftFTPTempName(name) { return false }
         if let values = try? URL(fileURLWithPath: path)
             .resourceValues(forKeys: [.isSymbolicLinkKey]),
            values.isSymbolicLink == true { return false }
@@ -125,7 +136,8 @@ actor SyncManager {
             && isDirectory.boolValue
     }
 
-    private func recentlyChangedFiles(in directoryPath: String, matcher: ExclusionMatcher) -> [String] {
+    private func recentlyChangedFiles(in directoryPath: String, matcher: ExclusionMatcher) -> DirectoryScanResult {
+        let burstLimit = 500
         let rootURL = URL(fileURLWithPath: directoryPath, isDirectory: true)
         let cutoff = Date().addingTimeInterval(-30)
         let keys: [URLResourceKey] = [
@@ -138,16 +150,21 @@ actor SyncManager {
             at: rootURL,
             includingPropertiesForKeys: keys,
             options: [.skipsPackageDescendants]
-        ) else { return [] }
+        ) else {
+            return DirectoryScanResult(paths: [], wasTruncated: false, limit: burstLimit)
+        }
 
         // Cap a single directory-event burst so a large move/extract can't
         // blast thousands of uploads in one go.
-        let burstLimit = 500
         var paths: [String] = []
+        var wasTruncated = false
         for case let fileURL as URL in enumerator {
-            if paths.count >= burstLimit { break }
+            if paths.count >= burstLimit {
+                wasTruncated = true
+                break
+            }
             let path = fileURL.path
-            if (path as NSString).lastPathComponent.hasPrefix(".__swiftftp_tmp__") { continue }
+            if isSwiftFTPTempName((path as NSString).lastPathComponent) { continue }
             if matcher.shouldExclude(path) { continue }
             guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
                   values.isSymbolicLink != true,
@@ -158,7 +175,12 @@ actor SyncManager {
                 paths.append(path)
             }
         }
-        return paths
+        return DirectoryScanResult(paths: paths, wasTruncated: wasTruncated, limit: burstLimit)
+    }
+
+    private func isSwiftFTPTempName(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return lower.hasPrefix(".__swiftftp_tmp__") || lower.hasSuffix(".__swiftftp_tmp__")
     }
 }
 
@@ -169,6 +191,7 @@ final class RealtimeSyncViewModel: ObservableObject {
     @Published var showAddSheet = false
     @Published var recentEvents: [(String, Date)] = []   // (filename, time)
     @Published var conflicts: [(String, Date)] = []      // skipped: remote newer
+    @Published var scanWarnings: [(String, Date)] = []   // directory scan truncated
     @Published var isValidating = false
     @Published private var runningWatcherIDs: Set<UUID> = []
 
@@ -340,6 +363,18 @@ final class RealtimeSyncViewModel: ObservableObject {
                     )
                 }
             }
+            await syncManager.setScanTruncatedCallback { [weak self] path, _, limit in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let name = URL(fileURLWithPath: path).lastPathComponent
+                    self.scanWarnings.insert((name, Date()), at: 0)
+                    if self.scanWarnings.count > 20 { self.scanWarnings.removeLast() }
+                    self.appState.alertItem = AlertItem(
+                        title: "同步扫描已截断",
+                        message: "目录「\(path)」一次变化超过 \(limit) 个近期文件，SwiftFTP 只处理了前 \(limit) 个。请运行一次手动初始同步，或重新保存剩余文件。"
+                    )
+                }
+            }
             let runningIDs = await syncManager.start(watchers: initialWatchers)
             Task { @MainActor [weak self] in
                 self?.runningWatcherIDs = runningIDs
@@ -366,6 +401,10 @@ extension SyncManager {
 
     func setBookmarkStaleCallback(_ callback: @Sendable @escaping (SyncWatcher) -> Void) {
         onBookmarkStale = callback
+    }
+
+    func setScanTruncatedCallback(_ callback: @Sendable @escaping (String, SyncWatcher, Int) -> Void) {
+        onScanTruncated = callback
     }
 }
 
@@ -490,6 +529,32 @@ struct RealtimeSyncView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(vm.conflicts.prefix(6), id: \.1) { name, date in
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange).font(.caption2)
+                                    Text(name).font(.caption).lineLimit(1)
+                                    Spacer()
+                                    Text(date.formatted(date: .omitted, time: .shortened))
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                .padding(.horizontal, 12)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 90)
+                }
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.06))
+            }
+            // -- Scan warnings (directory event capped) --
+            if !vm.scanWarnings.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("扫描已截断")
+                        .font(.caption).foregroundColor(.orange).padding(.horizontal, 12)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(vm.scanWarnings.prefix(6), id: \.1) { name, date in
                                 HStack {
                                     Image(systemName: "exclamationmark.triangle.fill")
                                         .foregroundColor(.orange).font(.caption2)

@@ -151,11 +151,12 @@ public struct ExclusionMatcher: Sendable {
     public let patterns: [String]
 
     public func shouldExclude(_ path: String) -> Bool {
-        let fileName = (path as NSString).lastPathComponent
+        let fileName = normalizedForMatching((path as NSString).lastPathComponent)
         for p in patterns {
-            if p.contains("*") {
-                if matchGlob(fileName, pattern: p) { return true }
-            } else if pathComponents(path).contains(p) {
+            let pattern = normalizedForMatching(p)
+            if pattern.contains("*") {
+                if matchGlob(fileName, pattern: pattern) { return true }
+            } else if pathComponents(path).contains(pattern) {
                 return true
             }
         }
@@ -163,7 +164,16 @@ public struct ExclusionMatcher: Sendable {
     }
 
     private func pathComponents(_ path: String) -> [String] {
-        path.split(separator: "/").map(String.init)
+        path.split(separator: "/").map { normalizedForMatching(String($0)) }
+    }
+
+    private func normalizedForMatching(_ value: String) -> String {
+        value
+            .folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            )
+            .lowercased()
     }
 
     private func matchGlob(_ string: String, pattern: String) -> Bool {

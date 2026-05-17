@@ -43,7 +43,7 @@ public enum SyncRuleValidationError: Error, Equatable, Sendable {
         case .localRootIsSymlink(let p):
             return "本地路径「\(p)」是一个符号链接。为避免同步范围意外越界，请直接选择真实文件夹。"
         case .remoteNotAbsolute(let p):
-            return "远程路径「\(p)」必须是以 / 开头的绝对路径。"
+            return "远程路径「\(p)」必须是以 / 开头，或 Windows 盘符开头的绝对路径。"
         case .overlapsExistingRule(let existing):
             return "该路径与已存在的同步规则「\(existing)」重叠（相同、或互为上下级目录）。重叠规则会造成重复同步甚至循环，请选择不重叠的目录。"
         }
@@ -74,21 +74,38 @@ public enum SyncPathValidator {
         ".ssh", ".gnupg", ".aws", ".kube", ".config"
     ]
 
+    // These home descendants are never safe, even when the selected root is
+    // deeper than the broad-folder check. Project folders under Documents or
+    // Downloads may be allowed; credential stores and app data are not.
+    private static let forbiddenHomeSubtrees: Set<String> = [
+        "library", ".ssh", ".gnupg", ".aws", ".kube", ".config",
+        ".docker", ".azure", ".gcloud", ".local"
+    ]
+
     // Remote subtrees that should never receive synced files (writing into
     // them can break a server / OS). `/var` is deliberately NOT here so the
     // canonical `/var/www/...` deploy target keeps working.
     // Compared against the backslash→slash canonical form, lowercased.
     private static let forbiddenRemoteSubtrees: [String] = [
         "/etc", "/bin", "/sbin", "/boot", "/sys", "/proc", "/dev",
-        "/system", "/private/etc", "/var/db",
-        "c:/windows", "c:/program files"
+        "/run", "/system", "/library", "/applications", "/private/etc",
+        "/private/var/db", "/usr", "/opt", "/root", "/lib", "/lib64",
+        "/srv", "/var/db", "/var/lib", "/var/log", "/var/cache",
+        "/var/spool", "/var/run", "/var/root",
+        "c:/windows", "c:/program files", "c:/program files (x86)",
+        "c:/programdata", "c:/documents and settings"
     ]
 
     // Shallow remote roots rejected outright (depth also catches most).
     private static let forbiddenRemoteExact: Set<String> = [
         "/", "/usr", "/var", "/root", "/lib", "/lib64", "/opt", "/srv",
-        "/system", "/library", "c:/", "c:"
+        "/system", "/library", "/home", "/users", "c:/", "c:"
     ]
+
+    private static let remoteHomeRoots: Set<String> = ["home", "users"]
+    private static let forbiddenWindowsHomeSubtrees: Set<String> = forbiddenHomeSubtrees
+        .union(["appdata"])
+    private static let posixLocale = Locale(identifier: "en_US_POSIX")
 
     // MARK: Normalization
 
@@ -107,11 +124,32 @@ public enum SyncPathValidator {
         normalized.split(separator: "/").map(String.init)
     }
 
+    private static func caseFold(_ value: String) -> String {
+        value
+            .folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: posixLocale
+            )
+            .lowercased()
+    }
+
     /// True when `a` and `b` are the same path or one contains the other
     /// (component-aware, so `/a/bc` does not "contain" `/a/b`).
     public static func isSameOrNested(_ a: String, _ b: String) -> Bool {
         let na = normalize(a).lowercased()
         let nb = normalize(b).lowercased()
+        return componentAwareSameOrNested(na, nb)
+    }
+
+    /// Remote-aware variant for POSIX and Windows-style remote paths. Unlike
+    /// local `normalize`, this never asks macOS to interpret a remote string.
+    public static func isRemoteSameOrNested(_ a: String, _ b: String) -> Bool {
+        let na = canonicalRemotePath(a)
+        let nb = canonicalRemotePath(b)
+        return componentAwareSameOrNested(na, nb)
+    }
+
+    private static func componentAwareSameOrNested(_ na: String, _ nb: String) -> Bool {
         if na == nb { return true }
         let ca = components(na)
         let cb = components(nb)
@@ -140,6 +178,10 @@ public enum SyncPathValidator {
         let lowerComps = comps.map { $0.lowercased() }
         if lowerComps.count == 3, lowerComps[0] == "users",
            forbiddenHomeChildren.contains(lowerComps[2]) {
+            return .forbiddenLocalRoot(norm)
+        }
+        if lowerComps.count >= 3, lowerComps[0] == "users",
+           forbiddenHomeSubtrees.contains(lowerComps[2]) {
             return .forbiddenLocalRoot(norm)
         }
         if comps.count < minimumDepth {
@@ -176,19 +218,12 @@ public enum SyncPathValidator {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .emptyRemotePath }
 
-        let isWindows = trimmed.count >= 2 &&
-            trimmed[trimmed.index(trimmed.startIndex, offsetBy: 1)] == ":"
-        guard trimmed.hasPrefix("/") || isWindows else {
+        guard isRemoteAbsolutePath(trimmed) else {
             return .remoteNotAbsolute(trimmed)
         }
 
-        let collapsed = trimmed.replacingOccurrences(of: "//", with: "/")
-        let norm = (collapsed.count > 1 && collapsed.hasSuffix("/"))
-            ? String(collapsed.dropLast())
-            : collapsed
-        // Canonical form: backslash → slash, lowercased. Lets one set of
-        // rules cover both POSIX and Windows-style remote paths.
-        let canonical = norm.replacingOccurrences(of: "\\", with: "/").lowercased()
+        let norm = displayRemotePath(trimmed)
+        let canonical = canonicalRemotePath(trimmed)
 
         if forbiddenRemoteExact.contains(canonical) {
             return .forbiddenRemoteRoot(norm)
@@ -197,10 +232,125 @@ public enum SyncPathValidator {
         where canonical == sub || canonical.hasPrefix(sub + "/") {
             return .forbiddenRemoteRoot(norm)
         }
+        if isForbiddenRemoteHomeRoot(canonical) {
+            return .forbiddenRemoteRoot(norm)
+        }
         if components(canonical).count < minimumDepth {
             return .remoteTooShallow(norm)
         }
         return nil
+    }
+
+    public static func canonicalRemotePath(_ raw: String) -> String {
+        normalizeRemotePath(raw, foldCase: true)
+    }
+
+    private static func displayRemotePath(_ raw: String) -> String {
+        normalizeRemotePath(raw, foldCase: false)
+    }
+
+    private static func normalizeRemotePath(_ raw: String, foldCase: Bool) -> String {
+        var value = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+        while value.contains("//") {
+            value = value.replacingOccurrences(of: "//", with: "/")
+        }
+        if isSlashPrefixedWindowsPath(value) {
+            value.removeFirst()
+        }
+
+        if let drive = windowsDrivePrefix(value) {
+            let rest = String(value.dropFirst(2))
+            let parts = normalizedRemoteSegments(rest, foldCase: foldCase)
+            let drivePart = foldCase ? caseFold(drive) : drive
+            return parts.isEmpty ? "\(drivePart)/" : "\(drivePart)/\(parts.joined(separator: "/"))"
+        }
+
+        let rest = value.hasPrefix("/") ? String(value.dropFirst()) : value
+        let parts = normalizedRemoteSegments(rest, foldCase: foldCase)
+        return parts.isEmpty ? "/" : "/" + parts.joined(separator: "/")
+    }
+
+    private static func normalizedRemoteSegments(_ raw: String, foldCase: Bool) -> [String] {
+        var parts: [String] = []
+        for segment in raw.split(separator: "/", omittingEmptySubsequences: true) {
+            let part = String(segment)
+            if part == "." { continue }
+            if part == ".." {
+                if !parts.isEmpty { parts.removeLast() }
+                continue
+            }
+            parts.append(foldCase ? caseFold(part) : part)
+        }
+        return parts
+    }
+
+    private static func isRemoteAbsolutePath(_ raw: String) -> Bool {
+        let value = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+        return value.hasPrefix("/") || windowsDrivePrefix(value) != nil
+    }
+
+    private static func windowsDrivePrefix(_ value: String) -> String? {
+        guard value.count >= 3,
+              let first = character(at: 0, in: value),
+              isASCIIAlpha(first),
+              character(at: 1, in: value) == ":",
+              character(at: 2, in: value) == "/" else {
+            return nil
+        }
+        return String(value.prefix(2))
+    }
+
+    private static func isSlashPrefixedWindowsPath(_ value: String) -> Bool {
+        guard value.count >= 4,
+              character(at: 0, in: value) == "/",
+              let drive = character(at: 1, in: value),
+              isASCIIAlpha(drive),
+              character(at: 2, in: value) == ":",
+              character(at: 3, in: value) == "/" else {
+            return false
+        }
+        return true
+    }
+
+    private static func character(at offset: Int, in value: String) -> Character? {
+        guard let index = value.index(value.startIndex, offsetBy: offset, limitedBy: value.endIndex),
+              index < value.endIndex else {
+            return nil
+        }
+        return value[index]
+    }
+
+    private static func isASCIIAlpha(_ character: Character) -> Bool {
+        guard character.unicodeScalars.count == 1,
+              let scalar = character.unicodeScalars.first else {
+            return false
+        }
+        return (65...90).contains(Int(scalar.value)) || (97...122).contains(Int(scalar.value))
+    }
+
+    private static func isForbiddenRemoteHomeRoot(_ canonical: String) -> Bool {
+        let comps = components(canonical)
+        if comps.count >= 2, remoteHomeRoots.contains(comps[0]) {
+            if comps.count == 2 { return true }
+            let child = comps[2]
+            if comps.count == 3, forbiddenHomeChildren.contains(child) { return true }
+            if forbiddenHomeSubtrees.contains(child) { return true }
+        }
+
+        guard comps.count >= 2,
+              comps[0].hasSuffix(":"),
+              comps[1] == "users" else {
+            return false
+        }
+        if comps.count <= 3 { return true }
+        let child = comps[3]
+        if comps.count == 4, forbiddenHomeChildren.contains(child) { return true }
+        if forbiddenWindowsHomeSubtrees.contains(child) { return true }
+        return false
     }
 
     // MARK: Overlap
@@ -217,7 +367,7 @@ public enum SyncPathValidator {
             if isSameOrNested(localPath, rule.local) {
                 return .overlapsExistingRule(existing: rule.local)
             }
-            if isSameOrNested(remotePath, rule.remote) {
+            if isRemoteSameOrNested(remotePath, rule.remote) {
                 return .overlapsExistingRule(existing: rule.remote)
             }
         }
