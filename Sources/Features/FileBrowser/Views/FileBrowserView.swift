@@ -232,17 +232,23 @@ struct FileBrowserView: View {
     }
 
     private var transferRail: some View {
-        VStack(spacing: 12) {
+        let uploadActive = !localVM.selectedIDs.isEmpty
+        let downloadActive = !remoteVM.selectedIDs.isEmpty
+
+        return VStack(spacing: 12) {
             Spacer()
             transferButton(systemImage: "arrow.right.circle.fill",
                            color: .blue,
+                           isActive: uploadActive,
                            help: "上传选中文件",
                            action: uploadSelected)
+                .disabled(!uploadActive)
             transferButton(systemImage: "arrow.left.circle.fill",
                            color: .green,
+                           isActive: downloadActive,
                            help: "下载选中文件",
                            action: downloadSelected)
-                .disabled(remoteVM.selectedIDs.isEmpty)
+                .disabled(!downloadActive)
 
             Divider().frame(width: 24)
 
@@ -290,12 +296,13 @@ struct FileBrowserView: View {
 
     private func transferButton(systemImage: String,
                                 color: Color,
+                                isActive: Bool = true,
                                 help: String,
                                 action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 22))
-                .foregroundColor(color)
+                .foregroundStyle(isActive ? color : Color.secondary.opacity(0.45))
         }
         .buttonStyle(.plain)
         .help(help)
