@@ -901,6 +901,164 @@ public enum SwiftFTPTempFile {
     }
 }
 
+public enum RemoteDriftIssueKind: Sendable, Equatable {
+    case remoteMissingFile
+    case remoteMissingDirectory
+    case remoteExtraFile
+    case remoteExtraDirectory
+    case remoteOutdatedFile
+    case remoteNewerFile
+    case typeMismatch
+    case caseFoldCollision
+    case timestampUncertain
+    case invalidRelativePath
+}
+
+public struct RemoteDriftIssue: Sendable, Equatable {
+    public var kind: RemoteDriftIssueKind
+    public var relativePath: String
+    public var local: SyncSnapshotItem?
+    public var remote: SyncSnapshotItem?
+
+    public init(
+        kind: RemoteDriftIssueKind,
+        relativePath: String,
+        local: SyncSnapshotItem? = nil,
+        remote: SyncSnapshotItem? = nil
+    ) {
+        self.kind = kind
+        self.relativePath = relativePath
+        self.local = local
+        self.remote = remote
+    }
+}
+
+public struct RemoteDriftReport: Sendable, Equatable {
+    public var issues: [RemoteDriftIssue]
+
+    public init(issues: [RemoteDriftIssue]) {
+        self.issues = issues.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    public var hasDrift: Bool { !issues.isEmpty }
+    public var remoteMissing: [RemoteDriftIssue] {
+        issues.filter { $0.kind == .remoteMissingFile || $0.kind == .remoteMissingDirectory }
+    }
+    public var remoteMissingDirectories: [RemoteDriftIssue] {
+        issues.filter { $0.kind == .remoteMissingDirectory }
+    }
+    public var remoteMissingFiles: [RemoteDriftIssue] {
+        issues.filter { $0.kind == .remoteMissingFile }
+    }
+    public var remoteExtras: [RemoteDriftIssue] {
+        issues.filter { $0.kind == .remoteExtraFile || $0.kind == .remoteExtraDirectory }
+    }
+    public var remoteOutdatedFiles: [RemoteDriftIssue] {
+        issues.filter { $0.kind == .remoteOutdatedFile }
+    }
+    public var remoteNewerFiles: [RemoteDriftIssue] {
+        issues.filter { $0.kind == .remoteNewerFile }
+    }
+    public var conflicts: [RemoteDriftIssue] {
+        issues.filter {
+            switch $0.kind {
+            case .typeMismatch, .caseFoldCollision, .timestampUncertain, .invalidRelativePath:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+    public var repairUploadFiles: [RemoteDriftIssue] {
+        remoteMissingFiles + remoteOutdatedFiles
+    }
+}
+
+public struct RemoteDriftDetectorOptions: Sendable, Equatable {
+    public var timestampTolerance: TimeInterval
+    public var remoteTimestampQuality: RemoteTimestampQuality
+
+    public init(
+        timestampTolerance: TimeInterval = SyncConflictDecision.defaultSkew,
+        remoteTimestampQuality: RemoteTimestampQuality = .reliable
+    ) {
+        self.timestampTolerance = timestampTolerance
+        self.remoteTimestampQuality = remoteTimestampQuality
+    }
+}
+
+public enum RemoteDriftDetector {
+    public static func report(
+        localItems: [SyncSnapshotItem],
+        remoteItems: [SyncSnapshotItem],
+        options: RemoteDriftDetectorOptions = RemoteDriftDetectorOptions()
+    ) -> RemoteDriftReport {
+        let plan = InitialSyncPlanner.plan(
+            localItems: localItems,
+            remoteItems: remoteItems,
+            options: InitialSyncPlannerOptions(
+                mode: .oneWayMirror(deleteRemote: true),
+                timestampTolerance: options.timestampTolerance,
+                remoteTimestampQuality: options.remoteTimestampQuality
+            )
+        )
+        var issues: [RemoteDriftIssue] = []
+        issues.append(contentsOf: plan.createDirectories.map {
+            RemoteDriftIssue(
+                kind: .remoteMissingDirectory,
+                relativePath: $0.relativePath,
+                local: $0.local
+            )
+        })
+        issues.append(contentsOf: plan.uploads.map {
+            RemoteDriftIssue(
+                kind: .remoteMissingFile,
+                relativePath: $0.relativePath,
+                local: $0.local
+            )
+        })
+        issues.append(contentsOf: plan.overwrites.map {
+            RemoteDriftIssue(
+                kind: .remoteOutdatedFile,
+                relativePath: $0.relativePath,
+                local: $0.local,
+                remote: $0.remote
+            )
+        })
+        issues.append(contentsOf: plan.remoteDeletes.map {
+            RemoteDriftIssue(
+                kind: $0.remote?.isDirectory == true ? .remoteExtraDirectory : .remoteExtraFile,
+                relativePath: $0.relativePath,
+                remote: $0.remote
+            )
+        })
+        issues.append(contentsOf: plan.conflicts.map {
+            RemoteDriftIssue(
+                kind: driftKind(for: $0.kind),
+                relativePath: $0.relativePath,
+                local: $0.local,
+                remote: $0.remote
+            )
+        })
+        return RemoteDriftReport(issues: issues)
+    }
+
+    private static func driftKind(for conflict: InitialSyncPlanConflictKind) -> RemoteDriftIssueKind {
+        switch conflict {
+        case .invalidRelativePath:
+            return .invalidRelativePath
+        case .caseFoldCollision:
+            return .caseFoldCollision
+        case .typeMismatch:
+            return .typeMismatch
+        case .remoteNewer:
+            return .remoteNewerFile
+        case .timestampUncertain:
+            return .timestampUncertain
+        }
+    }
+}
+
 public struct ManagedMirrorRootMarker: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 1
 

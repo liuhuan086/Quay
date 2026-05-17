@@ -455,6 +455,94 @@ final class InitialSyncPlannerTests: XCTestCase {
     }
 }
 
+final class RemoteDriftDetectorTests: XCTestCase {
+
+    func test_reportDetectsRemoteMissingExtraAndOutdatedItems() {
+        let base = Date(timeIntervalSince1970: 1_000_000)
+        let report = RemoteDriftDetector.report(
+            localItems: [
+                SyncSnapshotItem(relativePath: "Sources", isDirectory: true),
+                SyncSnapshotItem(relativePath: "Sources/App.swift", isDirectory: false, size: 10),
+                SyncSnapshotItem(
+                    relativePath: "README.md",
+                    isDirectory: false,
+                    size: 20,
+                    modifiedDate: base.addingTimeInterval(20)
+                )
+            ],
+            remoteItems: [
+                SyncSnapshotItem(
+                    relativePath: "README.md",
+                    isDirectory: false,
+                    size: 10,
+                    modifiedDate: base
+                ),
+                SyncSnapshotItem(relativePath: "RemoteOnly", isDirectory: true),
+                SyncSnapshotItem(relativePath: "RemoteOnly/log.txt", isDirectory: false, size: 1)
+            ]
+        )
+
+        XCTAssertEqual(Set(report.remoteMissing.map(\.kind)), [.remoteMissingDirectory, .remoteMissingFile])
+        XCTAssertEqual(report.remoteMissing.map(\.relativePath), ["Sources", "Sources/App.swift"])
+        XCTAssertEqual(report.remoteOutdatedFiles.map(\.relativePath), ["README.md"])
+        XCTAssertEqual(Set(report.remoteExtras.map(\.relativePath)), ["RemoteOnly", "RemoteOnly/log.txt"])
+        XCTAssertTrue(report.conflicts.isEmpty)
+    }
+
+    func test_reportDetectsRemoteNewerTypeMismatchAndCaseFoldCollision() {
+        let base = Date(timeIntervalSince1970: 1_000_000)
+        let report = RemoteDriftDetector.report(
+            localItems: [
+                SyncSnapshotItem(relativePath: "config", isDirectory: false, size: 1),
+                SyncSnapshotItem(relativePath: "Readme.md", isDirectory: false, size: 1),
+                SyncSnapshotItem(
+                    relativePath: "server.swift",
+                    isDirectory: false,
+                    size: 10,
+                    modifiedDate: base
+                )
+            ],
+            remoteItems: [
+                SyncSnapshotItem(relativePath: "config", isDirectory: true),
+                SyncSnapshotItem(relativePath: "README.md", isDirectory: false, size: 1),
+                SyncSnapshotItem(
+                    relativePath: "server.swift",
+                    isDirectory: false,
+                    size: 12,
+                    modifiedDate: base.addingTimeInterval(20)
+                )
+            ]
+        )
+
+        XCTAssertTrue(report.issues.contains {
+            $0.kind == .typeMismatch && $0.relativePath == "config"
+        })
+        XCTAssertTrue(report.issues.contains {
+            $0.kind == .caseFoldCollision && $0.relativePath == "Readme.md ↔ README.md"
+        })
+        XCTAssertTrue(report.issues.contains {
+            $0.kind == .remoteNewerFile && $0.relativePath == "server.swift"
+        })
+        XCTAssertTrue(report.remoteMissing.isEmpty)
+        XCTAssertTrue(report.remoteExtras.isEmpty)
+    }
+
+    func test_unreliableRemoteTimestampBecomesUncertainDrift() {
+        let report = RemoteDriftDetector.report(
+            localItems: [
+                SyncSnapshotItem(relativePath: "file.txt", isDirectory: false, size: 1)
+            ],
+            remoteItems: [
+                SyncSnapshotItem(relativePath: "file.txt", isDirectory: false, size: 1)
+            ],
+            options: RemoteDriftDetectorOptions(remoteTimestampQuality: .unreliable)
+        )
+
+        XCTAssertEqual(report.conflicts.map(\.kind), [.timestampUncertain])
+        XCTAssertTrue(report.repairUploadFiles.isEmpty)
+    }
+}
+
 final class SyncRuleCreationPolicyTests: XCTestCase {
 
     func test_futureOnlyBlocksOnlySharedLocalRemoteContent() {

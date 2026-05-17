@@ -17,7 +17,9 @@ Most of this document is the **target** model. Track what is actually shipped he
 
 **Mirror execution now shipped through Step 6:** one-way mirror rules can be created only after the user acknowledges deletion risk and a dedicated remote root. SwiftFTP writes `.swiftftp-mirror.json`, verifies it with a canary operation, uploads missing/newer local files from the dry-run plan, and moves remote-only or locally deleted paths into `.swiftftp-trash/<rule-id>/<timestamp>/...` instead of permanently deleting them.
 
-**Not yet implemented (still target-only):** B-side drift detection ("B missing → ask A"), manual repair actions, scheduled drift checks, full rule state machine, and stale-trash cleanup. The Acceptance Criteria section is the gate for those future phases.
+**Manual remote drift detection shipped through Step 7:** each sync rule can compare local and remote snapshots on demand, preview remote missing / extra / newer / older / type / case-folding / timestamp-uncertain drift, and offer repair-remote, ignore-once, or pause-rule actions. Repair writes only to the remote side; it never pulls B-side changes back into A.
+
+**Not yet implemented (still target-only):** scheduled drift checks, richer diff browsing, full rule state machine, and stale-trash cleanup. The Acceptance Criteria section is the gate for those future phases.
 
 **Additional shipped guardrail:** upload tasks now write to `<filename>.__swiftftp_tmp__` and rename into place on success. SwiftFTP temp files are ignored by watchers, local/remote snapshots, and default excludes. Stale-temp cleanup is intentionally not enabled until managed-root scoping exists.
 

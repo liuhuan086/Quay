@@ -152,6 +152,14 @@ Acceptance:
 
 ## Step 7: Remote Drift Detection
 
+Status:
+
+- Manual drift detection is available from each sync rule row.
+- Detection compares local and remote snapshots and reports remote missing, remote extra, remote older, remote newer, type mismatch, case-folding collision, invalid relative path, and uncertain timestamp cases.
+- The drift report is shown in a confirmation sheet with difference preview and actions to repair remote, ignore once, or pause the rule.
+- Repair writes only to the remote side: it creates missing directories, enqueues uploads/overwrites from local, and quarantines remote extras only for mirror rules with deletion enabled.
+- Scheduled drift detection and richer diff browsing remain future work.
+
 Scope:
 
 - Add manual drift detection first, scheduled drift detection later.

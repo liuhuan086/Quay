@@ -337,6 +337,66 @@ fileprivate struct PreparedSyncRule: Sendable {
     let plan: InitialSyncPlan
 }
 
+fileprivate struct PresentedRemoteDriftReport: Identifiable {
+    let id = UUID()
+    let watcher: SyncWatcher
+    let report: RemoteDriftReport
+
+    var canRepairRemote: Bool {
+        !report.remoteMissingDirectories.isEmpty ||
+            !report.repairUploadFiles.isEmpty ||
+            (!report.remoteExtras.isEmpty &&
+             watcher.mode == .oneWayMirror &&
+             watcher.mirrorDeleteEnabled)
+    }
+
+    var message: String {
+        var lines = [
+            "本地：\(watcher.localPath)",
+            "远程：\(watcher.remotePath)",
+            "",
+            "远程缺失：\(report.remoteMissing.count)",
+            "远程额外：\(report.remoteExtras.count)",
+            "远程较旧：\(report.remoteOutdatedFiles.count)",
+            "远程较新：\(report.remoteNewerFiles.count)",
+            "冲突：\(report.conflicts.count)"
+        ]
+        let preview = report.issues.prefix(10).map {
+            "\(Self.issueLabel($0.kind))：\($0.relativePath)"
+        }
+        if !preview.isEmpty {
+            lines.append("")
+            lines.append("差异预览：")
+            lines.append(contentsOf: preview)
+            if report.issues.count > preview.count {
+                lines.append("等 \(report.issues.count) 项")
+            }
+        }
+        lines.append("")
+        lines.append("修复只会写入远程，不会把远程变化同步回本地。")
+        if !report.remoteExtras.isEmpty &&
+            !(watcher.mode == .oneWayMirror && watcher.mirrorDeleteEnabled) {
+            lines.append("远程额外项不会在实时上传规则中删除。")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func issueLabel(_ kind: RemoteDriftIssueKind) -> String {
+        switch kind {
+        case .remoteMissingFile: return "远程缺失文件"
+        case .remoteMissingDirectory: return "远程缺失目录"
+        case .remoteExtraFile: return "远程额外文件"
+        case .remoteExtraDirectory: return "远程额外目录"
+        case .remoteOutdatedFile: return "远程较旧"
+        case .remoteNewerFile: return "远程较新"
+        case .typeMismatch: return "类型冲突"
+        case .caseFoldCollision: return "大小写冲突"
+        case .timestampUncertain: return "时间戳不确定"
+        case .invalidRelativePath: return "路径无效"
+        }
+    }
+}
+
 // MARK: - RealtimeSyncViewModel
 @MainActor
 final class RealtimeSyncViewModel: ObservableObject {
@@ -345,7 +405,9 @@ final class RealtimeSyncViewModel: ObservableObject {
     @Published var recentEvents: [(String, Date)] = []   // (filename, time)
     @Published var conflicts: [(String, Date)] = []      // skipped: remote newer
     @Published var scanWarnings: [(String, Date)] = []   // directory scan truncated
+    @Published var driftWarnings: [(String, Date)] = []   // remote drift detected
     @Published var isValidating = false
+    @Published fileprivate var pendingDriftReport: PresentedRemoteDriftReport?
     @Published private var runningWatcherIDs: Set<UUID> = []
 
     private let appState: AppState
@@ -684,6 +746,181 @@ final class RealtimeSyncViewModel: ObservableObject {
         refreshWatcher()
     }
 
+    func checkRemoteDrift(_ watcher: SyncWatcher) {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.detectRemoteDrift(for: watcher)
+        }
+    }
+
+    private func detectRemoteDrift(for watcher: SyncWatcher) async {
+        guard let bookmark = watcher.localPathBookmark else {
+            appState.alertItem = AlertItem(
+                title: "无法检测远端漂移",
+                message: "本地目录缺少沙盒授权，请重新添加同步规则。"
+            )
+            return
+        }
+
+        let url: URL
+        do {
+            var isStale = false
+            url = try URL(
+                resolvingBookmarkData: bookmark,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            guard !isStale else {
+                appState.alertItem = AlertItem(
+                    title: "无法检测远端漂移",
+                    message: "本地目录授权已过期，请重新添加同步规则。"
+                )
+                return
+            }
+        } catch {
+            appState.showError(error)
+            return
+        }
+
+        guard url.startAccessingSecurityScopedResource() else {
+            appState.alertItem = AlertItem(
+                title: "无法检测远端漂移",
+                message: "SwiftFTP 无法访问本地目录，请重新添加同步规则。"
+            )
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+
+        let matcher = ExclusionMatcher(patterns: driftExcludePatterns(for: watcher))
+        do {
+            let localItems = try localSnapshot(localPath: url.path, matcher: matcher)
+            let remoteItems = try await appState.remoteSnapshot(
+                server: server,
+                path: watcher.remotePath,
+                matcher: matcher
+            )
+            let report = RemoteDriftDetector.report(
+                localItems: localItems,
+                remoteItems: remoteItems,
+                options: RemoteDriftDetectorOptions(
+                    remoteTimestampQuality: SyncRuleCreationPolicy.remoteTimestampQuality(for: server.protocol_)
+                )
+            )
+            if report.hasDrift {
+                driftWarnings.insert((watcher.remotePath, Date()), at: 0)
+                if driftWarnings.count > 20 { driftWarnings.removeLast() }
+                pendingDriftReport = PresentedRemoteDriftReport(watcher: watcher, report: report)
+            } else {
+                appState.alertItem = AlertItem(
+                    title: "未发现远端漂移",
+                    message: "远程目录与本地源目录一致，未发现远程缺失、额外、更新或类型冲突。"
+                )
+            }
+        } catch {
+            appState.showError(error)
+        }
+    }
+
+    fileprivate func repairRemoteDrift(_ presented: PresentedRemoteDriftReport) async {
+        let watcher = presented.watcher
+        let report = presented.report
+        let missingDirectories = report.remoteMissingDirectories.map(\.relativePath)
+        await appState.createRemoteDirectories(
+            server: server,
+            remoteRoot: watcher.remotePath,
+            relativeDirectories: missingDirectories
+        )
+
+        for issue in report.repairUploadFiles {
+            guard let local = issue.local, !local.isDirectory else { continue }
+            await appState.enqueue(
+                server: server,
+                direction: .upload,
+                localURL: URL(fileURLWithPath: watcher.localPath)
+                    .appendingPathComponent(issue.relativePath),
+                remotePath: remotePath(root: watcher.remotePath, relative: issue.relativePath),
+                isAutoSync: true
+            )
+        }
+
+        let remoteExtras = collapsedRemoteExtraIssues(report.remoteExtras)
+        if !remoteExtras.isEmpty &&
+            watcher.mode == .oneWayMirror &&
+            watcher.mirrorDeleteEnabled {
+            guard remoteExtras.count <= MirrorDeleteSafetyPolicy.maxRealtimeDeletesPerMinute else {
+                pauseWatcher(
+                    watcher,
+                    title: "镜像同步已暂停",
+                    message: "远端漂移修复需要移动 \(remoteExtras.count) 个额外项目到回收站，超过安全阈值 \(MirrorDeleteSafetyPolicy.maxRealtimeDeletesPerMinute) 个。请手动确认远端目录后再恢复规则。"
+                )
+                return
+            }
+            for issue in remoteExtras {
+                let quarantinedPath = await appState.quarantineRemotePath(
+                    server: server,
+                    watcher: watcher,
+                    targetRemotePath: remotePath(root: watcher.remotePath, relative: issue.relativePath)
+                )
+                if quarantinedPath == nil {
+                    syncWatcherFromAppState(watcher)
+                    return
+                }
+            }
+        }
+
+        let uploadCount = report.repairUploadFiles.count
+        let quarantineCount = watcher.mode == .oneWayMirror && watcher.mirrorDeleteEnabled
+            ? remoteExtras.count
+            : 0
+        if let idx = watchers.firstIndex(where: { $0.id == watcher.id }) {
+            watchers[idx].lastSyncAt = Date()
+            watchers[idx].totalSynced += missingDirectories.count + uploadCount + quarantineCount
+            appState.upsertSyncWatcher(watchers[idx])
+        }
+        recentEvents.insert(("远端漂移修复", Date()), at: 0)
+        if recentEvents.count > 20 { recentEvents.removeLast() }
+        appState.alertItem = AlertItem(
+            title: "已开始修复远程",
+            message: "已创建 \(missingDirectories.count) 个目录，加入 \(uploadCount) 个上传任务，移动 \(quarantineCount) 个远端额外项目到回收站。本地文件没有被远端改动覆盖。"
+        )
+    }
+
+    fileprivate func pauseDriftedWatcher(_ presented: PresentedRemoteDriftReport) {
+        pauseWatcher(
+            presented.watcher,
+            title: "同步规则已暂停",
+            message: "已按你的选择暂停该规则。处理远端漂移后，可以手动重新开启。"
+        )
+    }
+
+    private func driftExcludePatterns(for watcher: SyncWatcher) -> [String] {
+        watcher.excludePatterns +
+            SyncWatcher.mandatorySecretExcludes +
+            [ManagedMirrorRoot.markerFileName, ManagedMirrorRoot.trashDirectoryName]
+    }
+
+    private func collapsedRemoteExtraIssues(_ issues: [RemoteDriftIssue]) -> [RemoteDriftIssue] {
+        let sorted = issues.sorted { lhs, rhs in
+            let leftDepth = lhs.relativePath.split(separator: "/").count
+            let rightDepth = rhs.relativePath.split(separator: "/").count
+            return leftDepth == rightDepth
+                ? lhs.relativePath < rhs.relativePath
+                : leftDepth < rightDepth
+        }
+        var selected: [RemoteDriftIssue] = []
+        for issue in sorted {
+            if selected.contains(where: {
+                issue.relativePath == $0.relativePath ||
+                    issue.relativePath.hasPrefix($0.relativePath + "/")
+            }) {
+                continue
+            }
+            selected.append(issue)
+        }
+        return selected
+    }
+
     // MARK: - Wire sync events
     private func wireSyncManager() {
         let initialWatchers = watchers
@@ -949,6 +1186,7 @@ struct RealtimeSyncView: View {
                 List(vm.watchers) { w in
                     WatcherRow(watcher: w,
                                onToggle: { vm.toggle(w) },
+                               onCheckDrift: { vm.checkRemoteDrift(w) },
                                onDelete: { vm.remove(w) })
                 }
                 .listStyle(.inset)
@@ -1031,8 +1269,50 @@ struct RealtimeSyncView: View {
                 .padding(.vertical, 6)
                 .background(Color.orange.opacity(0.06))
             }
+            // -- Remote drift reports --
+            if !vm.driftWarnings.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("远端漂移")
+                        .font(.caption).foregroundColor(.orange).padding(.horizontal, 12)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(vm.driftWarnings.prefix(6), id: \.1) { name, date in
+                                HStack {
+                                    Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                                        .foregroundColor(.orange).font(.caption2)
+                                    Text(name).font(.caption).lineLimit(1)
+                                    Spacer()
+                                    Text(date.formatted(date: .omitted, time: .shortened))
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                .padding(.horizontal, 12)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 90)
+                }
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.06))
+            }
         }
         .sheet(isPresented: $vm.showAddSheet) { addSheet }
+        .sheet(item: $vm.pendingDriftReport) { report in
+            RemoteDriftReportSheet(
+                report: report,
+                onRepair: {
+                    vm.pendingDriftReport = nil
+                    Task { await vm.repairRemoteDrift(report) }
+                },
+                onPause: {
+                    vm.pendingDriftReport = nil
+                    vm.pauseDriftedWatcher(report)
+                },
+                onIgnore: {
+                    vm.pendingDriftReport = nil
+                }
+            )
+        }
     }
 
     private var baseAcknowledgementText: String {
@@ -1402,10 +1682,63 @@ private struct RealtimeSyncHeaderGhostButton: View {
     }
 }
 
+private struct RemoteDriftReportSheet: View {
+    let report: PresentedRemoteDriftReport
+    let onRepair: () -> Void
+    let onPause: () -> Void
+    let onIgnore: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                    .font(.title2)
+                    .foregroundColor(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("远端漂移检测")
+                        .font(.headline)
+                    Text("只展示远端差异；不会把远端变化写回本地。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+
+            ScrollView {
+                Text(report.message)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(minHeight: 220)
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(NSColor.controlBackgroundColor).opacity(0.65))
+            )
+
+            HStack {
+                Button("忽略一次", action: onIgnore)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("暂停规则", role: .destructive, action: onPause)
+                if report.canRepairRemote {
+                    Button("修复远程", action: onRepair)
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .padding(22)
+        .frame(width: 540, height: 430)
+    }
+}
+
 // MARK: - Watcher Row
 struct WatcherRow: View {
     let watcher: SyncWatcher
     let onToggle: () -> Void
+    let onCheckDrift: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -1435,6 +1768,13 @@ struct WatcherRow: View {
                     Text("监控中").font(.caption2).foregroundColor(.green)
                 }
             }
+
+            Button(action: onCheckDrift) {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("检测远端漂移")
 
             Button(role: .destructive, action: onDelete) {
                 Image(systemName: "trash").foregroundColor(.secondary)
