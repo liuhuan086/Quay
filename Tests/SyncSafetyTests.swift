@@ -284,6 +284,177 @@ final class SyncConflictDecisionTests: XCTestCase {
     }
 }
 
+final class InitialSyncPlannerTests: XCTestCase {
+
+    func test_uploadModePlansLocalOnlyAndSkipsRemoteOnly() {
+        let plan = InitialSyncPlanner.plan(
+            localItems: [
+                SyncSnapshotItem(relativePath: "Sources", isDirectory: true),
+                SyncSnapshotItem(relativePath: "Sources/main.swift", isDirectory: false, size: 10)
+            ],
+            remoteItems: [
+                SyncSnapshotItem(relativePath: "remote-only.txt", isDirectory: false, size: 5)
+            ]
+        )
+
+        XCTAssertEqual(plan.createDirectories.map(\.relativePath), ["Sources"])
+        XCTAssertEqual(plan.uploads.map(\.relativePath), ["Sources/main.swift"])
+        XCTAssertEqual(plan.skipped.map(\.kind), [.skipRemoteOnly])
+        XCTAssertTrue(plan.conflicts.isEmpty)
+    }
+
+    func test_sharedFilesPlanOverwriteSkipAndRemoteNewerConflict() {
+        let base = Date(timeIntervalSince1970: 1_000_000)
+        let plan = InitialSyncPlanner.plan(
+            localItems: [
+                SyncSnapshotItem(
+                    relativePath: "newer.swift",
+                    isDirectory: false,
+                    size: 20,
+                    modifiedDate: base.addingTimeInterval(20)
+                ),
+                SyncSnapshotItem(
+                    relativePath: "same.swift",
+                    isDirectory: false,
+                    size: 10,
+                    modifiedDate: base
+                ),
+                SyncSnapshotItem(
+                    relativePath: "remote-newer.swift",
+                    isDirectory: false,
+                    size: 10,
+                    modifiedDate: base
+                )
+            ],
+            remoteItems: [
+                SyncSnapshotItem(
+                    relativePath: "newer.swift",
+                    isDirectory: false,
+                    size: 10,
+                    modifiedDate: base
+                ),
+                SyncSnapshotItem(
+                    relativePath: "same.swift",
+                    isDirectory: false,
+                    size: 10,
+                    modifiedDate: base.addingTimeInterval(1)
+                ),
+                SyncSnapshotItem(
+                    relativePath: "remote-newer.swift",
+                    isDirectory: false,
+                    size: 12,
+                    modifiedDate: base.addingTimeInterval(20)
+                )
+            ]
+        )
+
+        XCTAssertEqual(plan.overwrites.map(\.relativePath), ["newer.swift"])
+        XCTAssertEqual(plan.skipped.map(\.relativePath), ["same.swift"])
+        XCTAssertEqual(plan.conflicts.map(\.kind), [.remoteNewer])
+        XCTAssertEqual(plan.conflicts.map(\.relativePath), ["remote-newer.swift"])
+    }
+
+    func test_allowLocalWinsTurnsRemoteNewerIntoOverwrite() {
+        let base = Date(timeIntervalSince1970: 1_000_000)
+        let plan = InitialSyncPlanner.plan(
+            localItems: [
+                SyncSnapshotItem(relativePath: "file.txt", isDirectory: false, size: 1, modifiedDate: base)
+            ],
+            remoteItems: [
+                SyncSnapshotItem(
+                    relativePath: "file.txt",
+                    isDirectory: false,
+                    size: 2,
+                    modifiedDate: base.addingTimeInterval(20)
+                )
+            ],
+            options: InitialSyncPlannerOptions(allowLocalWins: true)
+        )
+
+        XCTAssertEqual(plan.overwrites.map(\.relativePath), ["file.txt"])
+        XCTAssertTrue(plan.conflicts.isEmpty)
+    }
+
+    func test_typeMismatchStopsPlanningForThatPath() {
+        let plan = InitialSyncPlanner.plan(
+            localItems: [
+                SyncSnapshotItem(relativePath: "config", isDirectory: false, size: 10)
+            ],
+            remoteItems: [
+                SyncSnapshotItem(relativePath: "config", isDirectory: true)
+            ]
+        )
+
+        XCTAssertEqual(plan.conflicts.map(\.kind), [.typeMismatch])
+        XCTAssertTrue(plan.overwrites.isEmpty)
+        XCTAssertTrue(plan.uploads.isEmpty)
+    }
+
+    func test_mirrorModePlansRemoteOnlyDeletesWithoutExecuting() {
+        let plan = InitialSyncPlanner.plan(
+            localItems: [],
+            remoteItems: [
+                SyncSnapshotItem(relativePath: "old", isDirectory: true),
+                SyncSnapshotItem(relativePath: "old/file.txt", isDirectory: false, size: 10)
+            ],
+            options: InitialSyncPlannerOptions(mode: .oneWayMirror(deleteRemote: true))
+        )
+
+        XCTAssertEqual(Set(plan.remoteDeletes.map(\.relativePath)), ["old", "old/file.txt"])
+        XCTAssertEqual(Set(plan.remoteDeletes.map(\.kind)), [.deleteRemoteDirectory, .deleteRemoteFile])
+        XCTAssertTrue(plan.skipped.isEmpty)
+    }
+
+    func test_caseFoldCollisionsBecomeConflicts() {
+        let localCollision = InitialSyncPlanner.plan(
+            localItems: [
+                SyncSnapshotItem(relativePath: "Readme.md", isDirectory: false),
+                SyncSnapshotItem(relativePath: "README.md", isDirectory: false)
+            ],
+            remoteItems: []
+        )
+        XCTAssertEqual(localCollision.conflicts.map(\.kind), [.caseFoldCollision])
+        XCTAssertTrue(localCollision.uploads.isEmpty)
+
+        let crossSideCollision = InitialSyncPlanner.plan(
+            localItems: [
+                SyncSnapshotItem(relativePath: "Readme.md", isDirectory: false)
+            ],
+            remoteItems: [
+                SyncSnapshotItem(relativePath: "README.md", isDirectory: false)
+            ]
+        )
+        XCTAssertEqual(crossSideCollision.conflicts.map(\.kind), [.caseFoldCollision])
+    }
+
+    func test_unreliableRemoteTimestampBecomesConflictUnlessLocalWins() {
+        let plan = InitialSyncPlanner.plan(
+            localItems: [
+                SyncSnapshotItem(relativePath: "file.txt", isDirectory: false, size: 1)
+            ],
+            remoteItems: [
+                SyncSnapshotItem(relativePath: "file.txt", isDirectory: false, size: 1)
+            ],
+            options: InitialSyncPlannerOptions(remoteTimestampQuality: .unreliable)
+        )
+
+        XCTAssertEqual(plan.conflicts.map(\.kind), [.timestampUncertain])
+        XCTAssertTrue(plan.overwrites.isEmpty)
+    }
+
+    func test_invalidRelativePathIsConflict() {
+        let plan = InitialSyncPlanner.plan(
+            localItems: [
+                SyncSnapshotItem(relativePath: "../escape.txt", isDirectory: false)
+            ],
+            remoteItems: []
+        )
+
+        XCTAssertEqual(plan.conflicts.map(\.kind), [.invalidRelativePath])
+        XCTAssertTrue(plan.uploads.isEmpty)
+    }
+}
+
 final class MandatorySecretExcludeTests: XCTestCase {
 
     /// Even with an empty user pattern set, the mandatory layer must still

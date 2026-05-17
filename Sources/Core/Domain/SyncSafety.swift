@@ -418,3 +418,429 @@ public enum SyncConflictDecision {
         return remoteModified.timeIntervalSince(localModified) > skew
     }
 }
+
+// MARK: - Initial sync planner
+
+public enum InitialSyncMode: Sendable, Equatable {
+    case realtimeUpload
+    case oneWayMirror(deleteRemote: Bool)
+
+    var plansRemoteDeletes: Bool {
+        if case .oneWayMirror(deleteRemote: true) = self { return true }
+        return false
+    }
+}
+
+public enum RemoteTimestampQuality: Sendable, Equatable {
+    case reliable
+    case unreliable
+}
+
+public struct InitialSyncPlannerOptions: Sendable, Equatable {
+    public var mode: InitialSyncMode
+    public var timestampTolerance: TimeInterval
+    public var remoteTimestampQuality: RemoteTimestampQuality
+    public var allowLocalWins: Bool
+
+    public init(
+        mode: InitialSyncMode = .realtimeUpload,
+        timestampTolerance: TimeInterval = SyncConflictDecision.defaultSkew,
+        remoteTimestampQuality: RemoteTimestampQuality = .reliable,
+        allowLocalWins: Bool = false
+    ) {
+        self.mode = mode
+        self.timestampTolerance = timestampTolerance
+        self.remoteTimestampQuality = remoteTimestampQuality
+        self.allowLocalWins = allowLocalWins
+    }
+}
+
+public struct SyncSnapshotItem: Sendable, Equatable {
+    public var relativePath: String
+    public var isDirectory: Bool
+    public var size: Int64
+    public var modifiedDate: Date?
+
+    public init(
+        relativePath: String,
+        isDirectory: Bool,
+        size: Int64 = 0,
+        modifiedDate: Date? = nil
+    ) {
+        self.relativePath = relativePath
+        self.isDirectory = isDirectory
+        self.size = size
+        self.modifiedDate = modifiedDate
+    }
+}
+
+public enum InitialSyncPlanActionKind: Sendable, Equatable {
+    case createRemoteDirectory
+    case uploadNewFile
+    case overwriteRemoteFile
+    case deleteRemoteFile
+    case deleteRemoteDirectory
+    case skipIdentical
+    case skipRemoteOnly
+}
+
+public struct InitialSyncPlanAction: Sendable, Equatable {
+    public var kind: InitialSyncPlanActionKind
+    public var relativePath: String
+    public var local: SyncSnapshotItem?
+    public var remote: SyncSnapshotItem?
+
+    public init(
+        kind: InitialSyncPlanActionKind,
+        relativePath: String,
+        local: SyncSnapshotItem? = nil,
+        remote: SyncSnapshotItem? = nil
+    ) {
+        self.kind = kind
+        self.relativePath = relativePath
+        self.local = local
+        self.remote = remote
+    }
+}
+
+public enum InitialSyncPlanConflictKind: Sendable, Equatable {
+    case invalidRelativePath
+    case caseFoldCollision
+    case typeMismatch
+    case remoteNewer
+    case timestampUncertain
+}
+
+public struct InitialSyncPlanConflict: Sendable, Equatable {
+    public var kind: InitialSyncPlanConflictKind
+    public var relativePath: String
+    public var local: SyncSnapshotItem?
+    public var remote: SyncSnapshotItem?
+
+    public init(
+        kind: InitialSyncPlanConflictKind,
+        relativePath: String,
+        local: SyncSnapshotItem? = nil,
+        remote: SyncSnapshotItem? = nil
+    ) {
+        self.kind = kind
+        self.relativePath = relativePath
+        self.local = local
+        self.remote = remote
+    }
+}
+
+public struct InitialSyncPlan: Sendable, Equatable {
+    public var createDirectories: [InitialSyncPlanAction] = []
+    public var uploads: [InitialSyncPlanAction] = []
+    public var overwrites: [InitialSyncPlanAction] = []
+    public var remoteDeletes: [InitialSyncPlanAction] = []
+    public var skipped: [InitialSyncPlanAction] = []
+    public var conflicts: [InitialSyncPlanConflict] = []
+
+    public var hasConflicts: Bool { !conflicts.isEmpty }
+    public var uploadWorkCount: Int {
+        createDirectories.count + uploads.count + overwrites.count
+    }
+}
+
+public enum InitialSyncPlanner {
+    private struct IndexedItem {
+        var relativePath: String
+        var foldedPath: String
+        var item: SyncSnapshotItem
+    }
+
+    private struct IndexResult {
+        var items: [String: IndexedItem]
+        var conflicts: [InitialSyncPlanConflict]
+    }
+
+    public static func plan(
+        localItems: [SyncSnapshotItem],
+        remoteItems: [SyncSnapshotItem],
+        options: InitialSyncPlannerOptions = InitialSyncPlannerOptions()
+    ) -> InitialSyncPlan {
+        var plan = InitialSyncPlan()
+        var localIndex = index(localItems)
+        var remoteIndex = index(remoteItems)
+        plan.conflicts.append(contentsOf: localIndex.conflicts)
+        plan.conflicts.append(contentsOf: remoteIndex.conflicts)
+
+        for key in Set(localIndex.items.keys).intersection(remoteIndex.items.keys).sorted() {
+            guard let local = localIndex.items[key],
+                  let remote = remoteIndex.items[key],
+                  local.relativePath != remote.relativePath else {
+                continue
+            }
+            plan.conflicts.append(
+                InitialSyncPlanConflict(
+                    kind: .caseFoldCollision,
+                    relativePath: "\(local.relativePath) ↔ \(remote.relativePath)",
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+            localIndex.items.removeValue(forKey: key)
+            remoteIndex.items.removeValue(forKey: key)
+        }
+
+        let keys = Set(localIndex.items.keys).union(remoteIndex.items.keys).sorted()
+        for key in keys {
+            let local = localIndex.items[key]
+            let remote = remoteIndex.items[key]
+            switch (local, remote) {
+            case let (local?, nil):
+                appendLocalOnly(local, to: &plan)
+            case let (nil, remote?):
+                appendRemoteOnly(remote, options: options, to: &plan)
+            case let (local?, remote?):
+                appendShared(local: local, remote: remote, options: options, to: &plan)
+            case (nil, nil):
+                continue
+            }
+        }
+
+        sort(&plan)
+        return plan
+    }
+
+    private static func appendLocalOnly(_ local: IndexedItem, to plan: inout InitialSyncPlan) {
+        let kind: InitialSyncPlanActionKind = local.item.isDirectory
+            ? .createRemoteDirectory
+            : .uploadNewFile
+        let action = InitialSyncPlanAction(
+            kind: kind,
+            relativePath: local.relativePath,
+            local: local.item
+        )
+        if local.item.isDirectory {
+            plan.createDirectories.append(action)
+        } else {
+            plan.uploads.append(action)
+        }
+    }
+
+    private static func appendRemoteOnly(
+        _ remote: IndexedItem,
+        options: InitialSyncPlannerOptions,
+        to plan: inout InitialSyncPlan
+    ) {
+        guard options.mode.plansRemoteDeletes else {
+            plan.skipped.append(
+                InitialSyncPlanAction(
+                    kind: .skipRemoteOnly,
+                    relativePath: remote.relativePath,
+                    remote: remote.item
+                )
+            )
+            return
+        }
+        let kind: InitialSyncPlanActionKind = remote.item.isDirectory
+            ? .deleteRemoteDirectory
+            : .deleteRemoteFile
+        plan.remoteDeletes.append(
+            InitialSyncPlanAction(
+                kind: kind,
+                relativePath: remote.relativePath,
+                remote: remote.item
+            )
+        )
+    }
+
+    private static func appendShared(
+        local: IndexedItem,
+        remote: IndexedItem,
+        options: InitialSyncPlannerOptions,
+        to plan: inout InitialSyncPlan
+    ) {
+        guard local.item.isDirectory == remote.item.isDirectory else {
+            plan.conflicts.append(
+                InitialSyncPlanConflict(
+                    kind: .typeMismatch,
+                    relativePath: local.relativePath,
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+            return
+        }
+        guard !local.item.isDirectory else {
+            plan.skipped.append(
+                InitialSyncPlanAction(
+                    kind: .skipIdentical,
+                    relativePath: local.relativePath,
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+            return
+        }
+        appendSharedFile(local: local, remote: remote, options: options, to: &plan)
+    }
+
+    private static func appendSharedFile(
+        local: IndexedItem,
+        remote: IndexedItem,
+        options: InitialSyncPlannerOptions,
+        to plan: inout InitialSyncPlan
+    ) {
+        guard options.remoteTimestampQuality == .reliable,
+              let localModified = local.item.modifiedDate,
+              let remoteModified = remote.item.modifiedDate else {
+            appendUncertainFile(local: local, remote: remote, options: options, to: &plan)
+            return
+        }
+
+        let delta = localModified.timeIntervalSince(remoteModified)
+        if remote.item.size == local.item.size,
+           abs(delta) <= options.timestampTolerance {
+            plan.skipped.append(
+                InitialSyncPlanAction(
+                    kind: .skipIdentical,
+                    relativePath: local.relativePath,
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+        } else if delta > options.timestampTolerance || options.allowLocalWins {
+            plan.overwrites.append(
+                InitialSyncPlanAction(
+                    kind: .overwriteRemoteFile,
+                    relativePath: local.relativePath,
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+        } else if remoteModified.timeIntervalSince(localModified) > options.timestampTolerance {
+            plan.conflicts.append(
+                InitialSyncPlanConflict(
+                    kind: .remoteNewer,
+                    relativePath: local.relativePath,
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+        } else {
+            plan.conflicts.append(
+                InitialSyncPlanConflict(
+                    kind: .timestampUncertain,
+                    relativePath: local.relativePath,
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+        }
+    }
+
+    private static func appendUncertainFile(
+        local: IndexedItem,
+        remote: IndexedItem,
+        options: InitialSyncPlannerOptions,
+        to plan: inout InitialSyncPlan
+    ) {
+        if options.allowLocalWins {
+            plan.overwrites.append(
+                InitialSyncPlanAction(
+                    kind: .overwriteRemoteFile,
+                    relativePath: local.relativePath,
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+        } else {
+            plan.conflicts.append(
+                InitialSyncPlanConflict(
+                    kind: .timestampUncertain,
+                    relativePath: local.relativePath,
+                    local: local.item,
+                    remote: remote.item
+                )
+            )
+        }
+    }
+
+    private static func index(_ items: [SyncSnapshotItem]) -> IndexResult {
+        var groups: [String: [IndexedItem]] = [:]
+        var conflicts: [InitialSyncPlanConflict] = []
+        for item in items {
+            guard let relativePath = canonicalRelativePath(item.relativePath) else {
+                conflicts.append(
+                    InitialSyncPlanConflict(
+                        kind: .invalidRelativePath,
+                        relativePath: item.relativePath,
+                        local: item
+                    )
+                )
+                continue
+            }
+            let foldedPath = caseFoldedPath(relativePath)
+            groups[foldedPath, default: []].append(
+                IndexedItem(relativePath: relativePath, foldedPath: foldedPath, item: item)
+            )
+        }
+
+        var indexed: [String: IndexedItem] = [:]
+        for (foldedPath, entries) in groups {
+            if entries.count == 1 {
+                indexed[foldedPath] = entries[0]
+                continue
+            }
+            let paths = entries.map(\.relativePath).sorted().joined(separator: " ↔ ")
+            conflicts.append(
+                InitialSyncPlanConflict(
+                    kind: .caseFoldCollision,
+                    relativePath: paths,
+                    local: entries.first?.item
+                )
+            )
+        }
+        return IndexResult(items: indexed, conflicts: conflicts)
+    }
+
+    private static func canonicalRelativePath(_ raw: String) -> String? {
+        var parts: [String] = []
+        let normalized = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+        guard !normalized.isEmpty, !normalized.hasPrefix("/") else { return nil }
+        for segment in normalized.split(separator: "/", omittingEmptySubsequences: true) {
+            let part = String(segment)
+            if part == "." { continue }
+            if part == ".." {
+                guard !parts.isEmpty else { return nil }
+                parts.removeLast()
+                continue
+            }
+            parts.append(part)
+        }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: "/")
+    }
+
+    private static func caseFoldedPath(_ path: String) -> String {
+        path
+            .folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            )
+            .lowercased()
+    }
+
+    private static func sort(_ plan: inout InitialSyncPlan) {
+        plan.createDirectories.sort { lhs, rhs in
+            (pathDepth(lhs.relativePath), lhs.relativePath) < (pathDepth(rhs.relativePath), rhs.relativePath)
+        }
+        plan.uploads.sort { $0.relativePath < $1.relativePath }
+        plan.overwrites.sort { $0.relativePath < $1.relativePath }
+        plan.remoteDeletes.sort { lhs, rhs in
+            (pathDepth(lhs.relativePath), lhs.relativePath) > (pathDepth(rhs.relativePath), rhs.relativePath)
+        }
+        plan.skipped.sort { $0.relativePath < $1.relativePath }
+        plan.conflicts.sort { $0.relativePath < $1.relativePath }
+    }
+
+    private static func pathDepth(_ path: String) -> Int {
+        path.split(separator: "/").count
+    }
+}

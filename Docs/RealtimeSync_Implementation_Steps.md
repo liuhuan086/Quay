@@ -38,6 +38,12 @@ Acceptance:
 
 ## Step 2: Initial Sync Planner
 
+Status:
+
+- Pure planner implemented in `SyncSafety.swift`.
+- Covered by `InitialSyncPlannerTests`.
+- The planner only returns a dry-run plan; it does not execute transfers or deletes.
+
 Scope:
 
 - Build a dry-run planner that recursively compares local and remote paths.
