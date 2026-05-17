@@ -278,6 +278,16 @@ struct FileBrowserView: View {
 
         HStack(spacing: 5) {
             Divider().frame(height: 16)
+            if pane == .local {
+                Button { localVM.openInFinder() } label: {
+                    Image(systemName: "arrow.up.right.circle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(width: 22, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help("在 Finder 中打开")
+            }
             paneActionButton(systemImage: "arrow.up.circle",
                              isActive: uploadActive,
                              help: "上传选中文件",
@@ -542,6 +552,7 @@ struct FilePane<Content: View, ToolbarActions: View>: View {
             if presentation == .regular {
                 HStack(spacing: 6) {
                     Image(systemName: icon).foregroundColor(.secondary).font(.system(size: 12))
+                        .help(title)
                     Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                     Spacer()
                     if isLoading {
@@ -662,6 +673,7 @@ struct BreadcrumbBar: View {
                 .help("根目录")
                 ForEach(Array(crumbs.enumerated()), id: \.offset) { _, crumb in
                     Image(systemName: "chevron.right").font(.caption2).foregroundColor(.secondary)
+                        .help("路径分隔")
                     Button { onNavigate(crumb.path) } label: {
                         Text(crumb.name).font(.system(size: 11)).lineLimit(1)
                     }

@@ -235,6 +235,7 @@ struct SidebarView: View {
                     .foregroundColor(.secondary)
                     .font(.caption)
                     .frame(width: 14)
+                    .help("搜索服务器")
                 TextField("搜索服务器", text: $search)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
@@ -242,6 +243,7 @@ struct SidebarView: View {
                 if !search.isEmpty {
                     Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundColor(.secondary)
+                        .help("清除搜索")
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
