@@ -110,6 +110,12 @@ Acceptance:
 
 ## Step 5: Managed Mirror Root
 
+Status:
+
+- Marker model and validation are implemented in `ManagedMirrorRoot`.
+- AppState can write/read `.swiftftp-mirror.json`, validate it before destructive actions, and run a SwiftFTP-owned create/rename/delete canary.
+- Mirror execution is still not enabled; these guards are infrastructure for Step 6.
+
 Scope:
 
 - Write `.swiftftp-mirror.json` inside destructive mirror roots.

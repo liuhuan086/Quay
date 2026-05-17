@@ -324,6 +324,148 @@ final class AppState: ObservableObject {
         }
     }
 
+    func writeManagedMirrorRootMarker(server: ServerConfig, watcher: SyncWatcher) async throws {
+        let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+        let client = try await pool.borrowClient(password: server.password)
+        defer { Task { await pool.returnClient(client) } }
+
+        let marker = ManagedMirrorRoot.marker(
+            for: watcher,
+            appVersion: Self.appVersionString
+        )
+        try await writeManagedMirrorRootMarker(marker, remoteRoot: watcher.remotePath, using: client)
+    }
+
+    func verifyManagedMirrorRoot(
+        server: ServerConfig,
+        watcher: SyncWatcher,
+        performCanary: Bool = false
+    ) async throws -> ManagedMirrorRootMarker {
+        let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+        let client = try await pool.borrowClient(password: server.password)
+        defer { Task { await pool.returnClient(client) } }
+
+        let marker = try await readManagedMirrorRootMarker(
+            remoteRoot: watcher.remotePath,
+            using: client
+        )
+        try ManagedMirrorRoot.validate(marker: marker, for: watcher)
+        if performCanary {
+            try await runManagedMirrorCanary(remoteRoot: watcher.remotePath, ruleID: watcher.id, using: client)
+        }
+        return marker
+    }
+
+    func ensureManagedMirrorRootBeforeDestructiveAction(
+        server: ServerConfig,
+        watcher: SyncWatcher,
+        targetRemotePath: String,
+        performCanary: Bool = false
+    ) async -> ManagedMirrorRootMarker? {
+        do {
+            let marker = try await verifyManagedMirrorRoot(
+                server: server,
+                watcher: watcher,
+                performCanary: performCanary
+            )
+            try ManagedMirrorRoot.validateDestructiveTarget(targetRemotePath, for: marker)
+            return marker
+        } catch {
+            pauseMirrorWatcher(watcher, reason: error)
+            return nil
+        }
+    }
+
+    private func writeManagedMirrorRootMarker(
+        _ marker: ManagedMirrorRootMarker,
+        remoteRoot: String,
+        using client: any AnyFTPClient
+    ) async throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(marker)
+        let markerPath = ManagedMirrorRoot.markerPath(remoteRoot: remoteRoot)
+        let temporaryPath = SwiftFTPTempFile.temporaryRemotePath(for: markerPath)
+
+        do {
+            try await uploadTemporaryData(data, remotePath: temporaryPath, using: client)
+            try await client.rename(from: temporaryPath, to: markerPath)
+        } catch {
+            try? await client.delete(path: temporaryPath, isDirectory: false)
+            throw ManagedMirrorRootError.markerIOFailed(FTPError.friendly(error).errorDescription ?? String(describing: error))
+        }
+    }
+
+    private func readManagedMirrorRootMarker(
+        remoteRoot: String,
+        using client: any AnyFTPClient
+    ) async throws -> ManagedMirrorRootMarker {
+        let markerPath = ManagedMirrorRoot.markerPath(remoteRoot: remoteRoot)
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftftp-marker-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        do {
+            try await client.download(remotePath: markerPath, localURL: localURL, offset: 0) { _ in }
+            let data = try Data(contentsOf: localURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(ManagedMirrorRootMarker.self, from: data)
+        } catch let error as DecodingError {
+            throw ManagedMirrorRootError.markerDecodeFailed(String(describing: error))
+        } catch let error as ManagedMirrorRootError {
+            throw error
+        } catch {
+            throw ManagedMirrorRootError.markerIOFailed(FTPError.friendly(error).errorDescription ?? String(describing: error))
+        }
+    }
+
+    private func runManagedMirrorCanary(
+        remoteRoot: String,
+        ruleID: UUID,
+        using client: any AnyFTPClient
+    ) async throws {
+        let data = Data("SwiftFTP managed mirror canary \(ruleID.uuidString)".utf8)
+        let temporaryPath = ManagedMirrorRoot.canaryTemporaryPath(remoteRoot: remoteRoot, ruleID: ruleID)
+        let finalPath = ManagedMirrorRoot.canaryFinalPath(remoteRoot: remoteRoot, ruleID: ruleID)
+
+        do {
+            try await uploadTemporaryData(data, remotePath: temporaryPath, using: client)
+            try await client.rename(from: temporaryPath, to: finalPath)
+            try await client.delete(path: finalPath, isDirectory: false)
+        } catch {
+            try? await client.delete(path: temporaryPath, isDirectory: false)
+            try? await client.delete(path: finalPath, isDirectory: false)
+            throw ManagedMirrorRootError.canaryFailed(FTPError.friendly(error).errorDescription ?? String(describing: error))
+        }
+    }
+
+    private func uploadTemporaryData(
+        _ data: Data,
+        remotePath: String,
+        using client: any AnyFTPClient
+    ) async throws {
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftftp-upload-\(UUID().uuidString).tmp")
+        try data.write(to: localURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        try await client.upload(localURL: localURL, remotePath: remotePath, offset: 0) { _ in }
+    }
+
+    private func pauseMirrorWatcher(_ watcher: SyncWatcher, reason: Error) {
+        var paused = watcher
+        paused.isActive = false
+        upsertSyncWatcher(paused)
+        let friendly = (reason as? LocalizedError)?.errorDescription
+            ?? FTPError.friendly(reason).errorDescription
+            ?? String(describing: reason)
+        alertItem = AlertItem(
+            title: "镜像同步已暂停",
+            message: friendly
+        )
+    }
+
     /// Best-effort remote modification date for a single file. Returns nil on
     /// any failure so the caller can fall back to normal upload behavior
     /// instead of stalling the user's workflow.
@@ -364,6 +506,19 @@ final class AppState: ObservableObject {
         let leftDepth = lhs.split(separator: "/").count
         let rightDepth = rhs.split(separator: "/").count
         return leftDepth == rightDepth ? lhs < rhs : leftDepth < rightDepth
+    }
+
+    private static var appVersionString: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        switch (version, build) {
+        case let (version?, build?) where !build.isEmpty:
+            return "\(version) (\(build))"
+        case let (version?, _):
+            return version
+        default:
+            return "unknown"
+        }
     }
 
     // MARK: - Enqueue Transfer

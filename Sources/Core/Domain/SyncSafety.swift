@@ -900,3 +900,161 @@ public enum SwiftFTPTempFile {
         isTemporaryFileName((path as NSString).lastPathComponent)
     }
 }
+
+public struct ManagedMirrorRootMarker: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = 1
+
+    public var schemaVersion: Int
+    public var appName: String
+    public var appVersion: String
+    public var ruleID: UUID
+    public var localRootDisplayPath: String
+    public var canonicalRemoteRoot: String
+    public var createdAt: Date
+    public var mode: SyncRuleMode
+
+    public init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        appName: String = "SwiftFTP",
+        appVersion: String,
+        ruleID: UUID,
+        localRootDisplayPath: String,
+        canonicalRemoteRoot: String,
+        createdAt: Date,
+        mode: SyncRuleMode
+    ) {
+        self.schemaVersion = schemaVersion
+        self.appName = appName
+        self.appVersion = appVersion
+        self.ruleID = ruleID
+        self.localRootDisplayPath = localRootDisplayPath
+        self.canonicalRemoteRoot = canonicalRemoteRoot
+        self.createdAt = createdAt
+        self.mode = mode
+    }
+}
+
+public enum ManagedMirrorRootError: LocalizedError, Equatable, Sendable {
+    case markerRuleMismatch(expected: UUID, actual: UUID)
+    case markerRemoteRootMismatch(expected: String, actual: String)
+    case markerModeMismatch(expected: SyncRuleMode, actual: SyncRuleMode)
+    case mirrorDeletionNotEnabled
+    case markerSchemaUnsupported(Int)
+    case destructivePathOutsideManagedRoot(path: String, root: String)
+    case markerDecodeFailed(String)
+    case markerIOFailed(String)
+    case canaryFailed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .markerRuleMismatch:
+            return "远程镜像 marker 与当前同步规则不匹配，已停止执行删除操作。"
+        case .markerRemoteRootMismatch(let expected, let actual):
+            return "远程镜像 marker 指向「\(actual)」，但当前规则目标是「\(expected)」，已停止执行删除操作。"
+        case .markerModeMismatch:
+            return "远程镜像 marker 的同步模式与当前规则不一致，已停止执行删除操作。"
+        case .mirrorDeletionNotEnabled:
+            return "当前规则不是已启用删除的单向镜像规则，已停止执行删除操作。"
+        case .markerSchemaUnsupported(let version):
+            return "远程镜像 marker 版本 \(version) 不受支持，已停止执行删除操作。"
+        case .destructivePathOutsideManagedRoot(let path, let root):
+            return "拒绝删除「\(path)」，它不在受管理的镜像根目录「\(root)」内。"
+        case .markerDecodeFailed(let message):
+            return "无法读取远程镜像 marker：\(message)"
+        case .markerIOFailed(let message):
+            return "远程镜像 marker 校验失败：\(message)"
+        case .canaryFailed(let message):
+            return "远程镜像 canary 检查失败：\(message)"
+        }
+    }
+}
+
+public enum ManagedMirrorRoot {
+    public static let markerFileName = ".swiftftp-mirror.json"
+    public static let canaryPrefix = ".swiftftp-canary-"
+
+    public static func marker(
+        for watcher: SyncWatcher,
+        appVersion: String,
+        createdAt: Date = Date()
+    ) -> ManagedMirrorRootMarker {
+        ManagedMirrorRootMarker(
+            appVersion: appVersion,
+            ruleID: watcher.id,
+            localRootDisplayPath: watcher.localPath,
+            canonicalRemoteRoot: SyncPathValidator.canonicalRemotePath(watcher.remotePath),
+            createdAt: createdAt,
+            mode: watcher.mode
+        )
+    }
+
+    public static func markerPath(remoteRoot: String) -> String {
+        join(remoteRoot: remoteRoot, child: markerFileName)
+    }
+
+    public static func canaryTemporaryPath(remoteRoot: String, ruleID: UUID) -> String {
+        join(remoteRoot: remoteRoot, child: "\(canaryPrefix)\(ruleID.uuidString).tmp")
+    }
+
+    public static func canaryFinalPath(remoteRoot: String, ruleID: UUID) -> String {
+        join(remoteRoot: remoteRoot, child: "\(canaryPrefix)\(ruleID.uuidString).ok")
+    }
+
+    public static func validate(
+        marker: ManagedMirrorRootMarker,
+        for watcher: SyncWatcher
+    ) throws {
+        guard marker.schemaVersion == ManagedMirrorRootMarker.currentSchemaVersion else {
+            throw ManagedMirrorRootError.markerSchemaUnsupported(marker.schemaVersion)
+        }
+        guard watcher.mode == .oneWayMirror, watcher.mirrorDeleteEnabled else {
+            throw ManagedMirrorRootError.mirrorDeletionNotEnabled
+        }
+        guard marker.ruleID == watcher.id else {
+            throw ManagedMirrorRootError.markerRuleMismatch(
+                expected: watcher.id,
+                actual: marker.ruleID
+            )
+        }
+        let expectedRoot = SyncPathValidator.canonicalRemotePath(watcher.remotePath)
+        guard marker.canonicalRemoteRoot == expectedRoot else {
+            throw ManagedMirrorRootError.markerRemoteRootMismatch(
+                expected: expectedRoot,
+                actual: marker.canonicalRemoteRoot
+            )
+        }
+        guard marker.mode == watcher.mode else {
+            throw ManagedMirrorRootError.markerModeMismatch(
+                expected: watcher.mode,
+                actual: marker.mode
+            )
+        }
+    }
+
+    public static func validateDestructiveTarget(
+        _ remotePath: String,
+        for marker: ManagedMirrorRootMarker
+    ) throws {
+        guard contains(remotePath, inRemoteRoot: marker.canonicalRemoteRoot) else {
+            throw ManagedMirrorRootError.destructivePathOutsideManagedRoot(
+                path: SyncPathValidator.canonicalRemotePath(remotePath),
+                root: marker.canonicalRemoteRoot
+            )
+        }
+    }
+
+    public static func contains(_ remotePath: String, inRemoteRoot remoteRoot: String) -> Bool {
+        let root = SyncPathValidator.canonicalRemotePath(remoteRoot)
+        let path = SyncPathValidator.canonicalRemotePath(remotePath)
+        guard root != "/" else { return false }
+        if path == root { return true }
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        return path.hasPrefix(prefix)
+    }
+
+    private static func join(remoteRoot: String, child: String) -> String {
+        let root = SyncPathValidator.canonicalRemotePath(remoteRoot)
+        if root == "/" { return "/" + child }
+        return root.hasSuffix("/") ? root + child : root + "/" + child
+    }
+}

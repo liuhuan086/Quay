@@ -531,6 +531,135 @@ final class SwiftFTPTempFileTests: XCTestCase {
     }
 }
 
+final class ManagedMirrorRootTests: XCTestCase {
+
+    func test_markerUsesCanonicalRemoteRootAndWatcherIdentity() {
+        let id = UUID()
+        let watcher = mirrorWatcher(id: id, remotePath: "/Users/LiuHuan/Downloads/docs/../docs")
+        let createdAt = Date(timeIntervalSince1970: 1_000)
+
+        let marker = ManagedMirrorRoot.marker(
+            for: watcher,
+            appVersion: "2.0.0",
+            createdAt: createdAt
+        )
+
+        XCTAssertEqual(marker.schemaVersion, ManagedMirrorRootMarker.currentSchemaVersion)
+        XCTAssertEqual(marker.appVersion, "2.0.0")
+        XCTAssertEqual(marker.ruleID, id)
+        XCTAssertEqual(marker.localRootDisplayPath, "/Users/huan/Downloads/docs")
+        XCTAssertEqual(marker.canonicalRemoteRoot, "/users/liuhuan/downloads/docs")
+        XCTAssertEqual(marker.createdAt, createdAt)
+        XCTAssertEqual(marker.mode, .oneWayMirror)
+    }
+
+    func test_markerAndCanaryPathsStayInsideCanonicalRemoteRoot() {
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
+        XCTAssertEqual(
+            ManagedMirrorRoot.markerPath(remoteRoot: "/Users/liuhuan/Downloads/docs"),
+            "/users/liuhuan/downloads/docs/.swiftftp-mirror.json"
+        )
+        XCTAssertEqual(
+            ManagedMirrorRoot.canaryTemporaryPath(remoteRoot: "/Users/liuhuan/Downloads/docs", ruleID: id),
+            "/users/liuhuan/downloads/docs/.swiftftp-canary-00000000-0000-0000-0000-000000000001.tmp"
+        )
+        XCTAssertEqual(
+            ManagedMirrorRoot.canaryFinalPath(remoteRoot: "/Users/liuhuan/Downloads/docs", ruleID: id),
+            "/users/liuhuan/downloads/docs/.swiftftp-canary-00000000-0000-0000-0000-000000000001.ok"
+        )
+    }
+
+    func test_validateAcceptsMatchingMarker() throws {
+        let watcher = mirrorWatcher(remotePath: "/Users/liuhuan/Downloads/docs")
+        let marker = ManagedMirrorRoot.marker(
+            for: watcher,
+            appVersion: "2.0.0",
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+
+        XCTAssertNoThrow(try ManagedMirrorRoot.validate(marker: marker, for: watcher))
+    }
+
+    func test_validateRejectsMismatchedRuleRootModeAndSchema() {
+        let watcher = mirrorWatcher(remotePath: "/Users/liuhuan/Downloads/docs")
+
+        var wrongRule = ManagedMirrorRoot.marker(for: watcher, appVersion: "2.0.0")
+        wrongRule.ruleID = UUID()
+        XCTAssertThrowsError(try ManagedMirrorRoot.validate(marker: wrongRule, for: watcher))
+
+        var wrongRoot = ManagedMirrorRoot.marker(for: watcher, appVersion: "2.0.0")
+        wrongRoot.canonicalRemoteRoot = "/users/liuhuan/downloads/other"
+        XCTAssertThrowsError(try ManagedMirrorRoot.validate(marker: wrongRoot, for: watcher))
+
+        var wrongMode = ManagedMirrorRoot.marker(for: watcher, appVersion: "2.0.0")
+        wrongMode.mode = .realtimeUpload
+        XCTAssertThrowsError(try ManagedMirrorRoot.validate(marker: wrongMode, for: watcher))
+
+        var wrongSchema = ManagedMirrorRoot.marker(for: watcher, appVersion: "2.0.0")
+        wrongSchema.schemaVersion = 999
+        XCTAssertThrowsError(try ManagedMirrorRoot.validate(marker: wrongSchema, for: watcher))
+
+        var realtimeWatcher = watcher
+        realtimeWatcher.mode = .realtimeUpload
+        realtimeWatcher.mirrorDeleteEnabled = false
+        let realtimeMarker = ManagedMirrorRoot.marker(for: realtimeWatcher, appVersion: "2.0.0")
+        XCTAssertThrowsError(try ManagedMirrorRoot.validate(marker: realtimeMarker, for: realtimeWatcher))
+    }
+
+    func test_destructiveTargetMustStayInsideManagedRoot() throws {
+        let watcher = mirrorWatcher(remotePath: "/Users/liuhuan/Downloads/docs")
+        let marker = ManagedMirrorRoot.marker(for: watcher, appVersion: "2.0.0")
+
+        XCTAssertTrue(ManagedMirrorRoot.contains(
+            "/Users/liuhuan/Downloads/docs/Sources/main.swift",
+            inRemoteRoot: marker.canonicalRemoteRoot
+        ))
+        XCTAssertTrue(ManagedMirrorRoot.contains(
+            "/Users/liuhuan/Downloads/docs",
+            inRemoteRoot: marker.canonicalRemoteRoot
+        ))
+        XCTAssertFalse(ManagedMirrorRoot.contains(
+            "/Users/liuhuan/Downloads/docs-backup/file.txt",
+            inRemoteRoot: marker.canonicalRemoteRoot
+        ))
+        XCTAssertFalse(ManagedMirrorRoot.contains(
+            "/etc/passwd",
+            inRemoteRoot: marker.canonicalRemoteRoot
+        ))
+
+        XCTAssertNoThrow(try ManagedMirrorRoot.validateDestructiveTarget(
+            "/Users/liuhuan/Downloads/docs/Sources/main.swift",
+            for: marker
+        ))
+        XCTAssertThrowsError(try ManagedMirrorRoot.validateDestructiveTarget(
+            "/Users/liuhuan/Downloads/docs-backup/file.txt",
+            for: marker
+        ))
+    }
+
+    private func mirrorWatcher(
+        id: UUID = UUID(),
+        remotePath: String
+    ) -> SyncWatcher {
+        SyncWatcher(
+            id: id,
+            serverID: UUID(),
+            serverName: "Mac",
+            localPath: "/Users/huan/Downloads/docs",
+            localPathBookmark: nil,
+            remotePath: remotePath,
+            excludePatterns: [],
+            mode: .oneWayMirror,
+            initialSyncPolicy: .uploadMissingAndNewer,
+            mirrorDeleteEnabled: true,
+            isActive: true,
+            lastSyncAt: nil,
+            totalSynced: 0
+        )
+    }
+}
+
 final class SyncWatcherCodingTests: XCTestCase {
 
     func test_legacyWatcherDecodesWithSafeDefaults() throws {
