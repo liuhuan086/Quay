@@ -131,7 +131,16 @@ struct ServerEditView: View {
             .padding(.horizontal, 20).padding(.vertical, 12)
         }
         .frame(width: 500)
-        .onChange(of: protocol_) { oldValue, newValue in port = "\(newValue.defaultPort)" }
+        .onAppear {
+            showPassword = false
+        }
+        .onChange(of: protocol_) { oldValue, newValue in
+            port = "\(newValue.defaultPort)"
+            showPassword = false
+        }
+        .onChange(of: useSSHKey) { oldValue, newValue in
+            showPassword = false
+        }
     }
 
     // MARK: - Basic Tab
@@ -212,26 +221,11 @@ struct ServerEditView: View {
             if showPassword {
                 TextField(placeholder, text: $password)
                     .textFieldStyle(.roundedBorder)
+                    .textContentType(.password)
             } else {
-                // Always show fixed 16 dots regardless of actual password length
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 5)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(Color(NSColor.textBackgroundColor)))
-                        .frame(height: 22)
-                    if password.isEmpty {
-                        Text(placeholder)
-                            .foregroundColor(.secondary.opacity(0.5))
-                            .font(.system(size: 13))
-                            .padding(.horizontal, 4)
-                    } else {
-                        Text(String(repeating: "•", count: 16))
-                            .font(.system(size: 13))
-                            .padding(.horizontal, 4)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { showPassword = true }
+                SecureField(placeholder, text: $password)
+                    .textFieldStyle(.roundedBorder)
+                    .textContentType(.password)
             }
             Button {
                 showPassword.toggle()
