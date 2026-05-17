@@ -148,18 +148,15 @@ struct FileBrowserView: View {
 
             Group {
                 switch compactPane {
-                case .local: localPane
-                case .remote: remotePane
+                case .local: localPane(showTransferActions: true)
+                case .remote: remotePane(showTransferActions: true)
                 }
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-
-            Divider()
-            compactTransferBar
         }
     }
 
-    private var localPane: some View {
+    private func localPane(showTransferActions: Bool = false) -> some View {
         FilePane(
             title: "本地", icon: "desktopcomputer",
             path: localVM.currentPath, canGoUp: localVM.canGoUp,
@@ -168,7 +165,12 @@ struct FileBrowserView: View {
             onNavigate: { localVM.navigate(to: $0) },
             onRefresh: { localVM.refresh() },
             onNewFolder: nil,
-            onOpenExternal: { localVM.openInFinder() }
+            onOpenExternal: { localVM.openInFinder() },
+            toolbarActions: {
+                if showTransferActions {
+                    compactPaneActions(for: .local)
+                }
+            }
         ) {
             LocalFileList(vm: localVM,
                           onUpload: { uploadLocalItems($0) },
@@ -180,7 +182,7 @@ struct FileBrowserView: View {
         }
     }
 
-    private var remotePane: some View {
+    private func remotePane(showTransferActions: Bool = false) -> some View {
         FilePane(
             title: server.displayName, icon: server.protocol_.sfSymbol,
             path: remoteVM.currentPath, canGoUp: remoteVM.canGoUp,
@@ -189,7 +191,12 @@ struct FileBrowserView: View {
             onNavigate: { path in Task { await remoteVM.navigate(to: path) } },
             onRefresh: { Task { await remoteVM.refresh() } },
             onNewFolder: { showNewFolderRemote = true },
-            onOpenExternal: nil
+            onOpenExternal: nil,
+            toolbarActions: {
+                if showTransferActions {
+                    compactPaneActions(for: .remote)
+                }
+            }
         ) {
             FileDropContainer(onDrop: handleUploadDrop) {
                 RemoteFileList(vm: remoteVM,
@@ -198,6 +205,14 @@ struct FileBrowserView: View {
                                onRename: { item in showRenameRemote = item })
             }
         }
+    }
+
+    private var localPane: some View {
+        localPane()
+    }
+
+    private var remotePane: some View {
+        remotePane()
     }
 
     private var transferRail: some View {
@@ -229,29 +244,32 @@ struct FileBrowserView: View {
         .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
     }
 
-    private var compactTransferBar: some View {
-        HStack(spacing: 18) {
-            Spacer()
-            transferButton(systemImage: "arrow.up.doc.fill",
-                           color: .blue,
-                           help: "上传选中文件",
-                           action: uploadSelected)
-            transferButton(systemImage: "arrow.down.doc.fill",
-                           color: .green,
-                           help: "下载选中文件",
-                           action: downloadSelected)
-                .disabled(remoteVM.selectedIDs.isEmpty)
+    @ViewBuilder
+    private func compactPaneActions(for pane: BrowserPane) -> some View {
+        let uploadActive = pane == .local && !localVM.selectedIDs.isEmpty
+        let downloadActive = pane == .remote && !remoteVM.selectedIDs.isEmpty
+
+        HStack(spacing: 5) {
+            Divider().frame(height: 16)
+            paneActionButton(systemImage: "arrow.up.circle",
+                             isActive: uploadActive,
+                             help: "上传选中文件",
+                             action: uploadSelected)
+                .disabled(!uploadActive)
+            paneActionButton(systemImage: "arrow.down.circle",
+                             isActive: downloadActive,
+                             help: "下载选中文件",
+                             action: downloadSelected)
+                .disabled(!downloadActive)
             Button { showSyncView = true } label: {
                 Image(systemName: "arrow.triangle.2.circlepath.circle")
-                    .font(.system(size: 18))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundColor(.secondary)
+                    .frame(width: 22, height: 18)
             }
             .buttonStyle(.plain)
             .help("自动同步设置")
-            Spacer()
         }
-        .padding(.vertical, 7)
-        .background(Color(NSColor.controlBackgroundColor))
     }
 
     private func transferButton(systemImage: String,
@@ -262,6 +280,20 @@ struct FileBrowserView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 22))
                 .foregroundColor(color)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func paneActionButton(systemImage: String,
+                                  isActive: Bool,
+                                  help: String,
+                                  action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(isActive ? Color(nsColor: .systemBlue) : Color.secondary.opacity(0.55))
+                .frame(width: 21, height: 18)
         }
         .buttonStyle(.plain)
         .help(help)
@@ -433,7 +465,7 @@ private struct TransferCompletionWatcher: View {
 }
 
 // MARK: - Generic File Pane
-struct FilePane<Content: View>: View {
+struct FilePane<Content: View, ToolbarActions: View>: View {
     let title: String
     let icon: String
     let path: String
@@ -444,7 +476,34 @@ struct FilePane<Content: View>: View {
     let onRefresh: () -> Void
     let onNewFolder: (() -> Void)?
     let onOpenExternal: (() -> Void)?
+    @ViewBuilder let toolbarActions: () -> ToolbarActions
     @ViewBuilder let content: () -> Content
+
+    init(title: String,
+         icon: String,
+         path: String,
+         canGoUp: Bool,
+         isLoading: Bool,
+         onUp: @escaping () -> Void,
+         onNavigate: @escaping (String) -> Void,
+         onRefresh: @escaping () -> Void,
+         onNewFolder: (() -> Void)?,
+         onOpenExternal: (() -> Void)?,
+         @ViewBuilder toolbarActions: @escaping () -> ToolbarActions,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.path = path
+        self.canGoUp = canGoUp
+        self.isLoading = isLoading
+        self.onUp = onUp
+        self.onNavigate = onNavigate
+        self.onRefresh = onRefresh
+        self.onNewFolder = onNewFolder
+        self.onOpenExternal = onOpenExternal
+        self.toolbarActions = toolbarActions
+        self.content = content
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -463,7 +522,14 @@ struct FilePane<Content: View>: View {
             .background(Color(NSColor.controlBackgroundColor))
 
             // Breadcrumb
-            BreadcrumbBar(path: path, canGoUp: canGoUp, onUp: onUp, onNavigate: onNavigate)
+            HStack(spacing: 8) {
+                BreadcrumbBar(path: path, canGoUp: canGoUp, onUp: onUp, onNavigate: onNavigate)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                toolbarActions()
+            }
+            .padding(.trailing, 10)
+            .frame(height: 26)
+            .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
 
             Divider()
             content()
@@ -488,6 +554,33 @@ struct FilePane<Content: View>: View {
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(Color(NSColor.controlBackgroundColor))
         }
+    }
+}
+
+extension FilePane where ToolbarActions == EmptyView {
+    init(title: String,
+         icon: String,
+         path: String,
+         canGoUp: Bool,
+         isLoading: Bool,
+         onUp: @escaping () -> Void,
+         onNavigate: @escaping (String) -> Void,
+         onRefresh: @escaping () -> Void,
+         onNewFolder: (() -> Void)?,
+         onOpenExternal: (() -> Void)?,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.init(title: title,
+                  icon: icon,
+                  path: path,
+                  canGoUp: canGoUp,
+                  isLoading: isLoading,
+                  onUp: onUp,
+                  onNavigate: onNavigate,
+                  onRefresh: onRefresh,
+                  onNewFolder: onNewFolder,
+                  onOpenExternal: onOpenExternal,
+                  toolbarActions: { EmptyView() },
+                  content: content)
     }
 }
 
@@ -534,7 +627,6 @@ struct BreadcrumbBar: View {
             .padding(.horizontal, 8)
         }
         .frame(height: 26)
-        .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
     }
 }
 
