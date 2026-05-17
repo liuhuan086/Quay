@@ -100,7 +100,12 @@ struct FileBrowserView: View {
                     localVM.refresh()
                 } label: {
                     Image(systemName: "arrow.clockwise")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 13, height: 13)
+                        .frame(width: 18, height: 18)
                 }
+                .controlSize(.small)
                 .keyboardShortcut("r", modifiers: .command)
                 .help("刷新 (⌘R)")
             }
