@@ -143,8 +143,20 @@ struct WelcomeView: View {
 
             HStack(spacing: 14) {
                 Button { appState.presentAddServer() } label: {
-                    Label("新建连接", systemImage: "plus.circle")
-                }.buttonStyle(.borderedProminent).controlSize(.large)
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("新建连接")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 14)
+                    .frame(height: 29)
+                    .background(Capsule().fill(Color(red: 0.0, green: 0.478, blue: 1.0)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("新建连接")
 
                 if let first = appState.servers.first {
                     Button { Task { await appState.connect(to: first) } } label: {
