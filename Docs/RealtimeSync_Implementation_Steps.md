@@ -189,3 +189,25 @@ Acceptance:
 
 - No doc claims mirror deletion is shipped before it actually is.
 - Destructive behavior has tests, confirmations, and visible failure states.
+
+## Step 9: Scheduled Remote Drift Audits
+
+Status:
+
+- Active sync rules now run scheduled remote drift audits in addition to manual checks.
+- SwiftFTP records `lastDriftCheckAt` per rule so polling is rate-limited and survives persistence.
+- Scheduled audits surface drift with the same repair / ignore / pause flow as manual checks, but do not show "no drift" success alerts.
+
+Scope:
+
+- Poll active rules because FTP/SFTP servers do not push remote-side file changes to the client.
+- Reuse the Step 7 drift detector and remote-only repair model.
+- Never auto-repair from a scheduled audit; ask before writing to remote.
+- Never write B-side changes back to A.
+
+Acceptance:
+
+- Scheduled checks do not run for inactive rules.
+- A rule with no previous check is due for its first audit.
+- A recently checked rule is skipped until the minimum interval expires.
+- Unit tests cover the scheduling policy and watcher persistence compatibility.

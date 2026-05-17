@@ -397,6 +397,19 @@ fileprivate struct PresentedRemoteDriftReport: Identifiable {
     }
 }
 
+fileprivate enum DriftDetectionPresentation {
+    case manual
+    case scheduled
+
+    var showsNoDriftAlert: Bool {
+        self == .manual
+    }
+
+    var showsErrors: Bool {
+        self == .manual
+    }
+}
+
 // MARK: - RealtimeSyncViewModel
 @MainActor
 final class RealtimeSyncViewModel: ObservableObject {
@@ -414,6 +427,9 @@ final class RealtimeSyncViewModel: ObservableObject {
     private let server: ServerConfig
     private let syncManager = SyncManager()
     private var mirrorDeleteHistory: [UUID: [Date]] = [:]
+    private var driftAuditCancellable: AnyCancellable?
+    private var driftAuditBootstrapTask: Task<Void, Never>?
+    private var runningDriftAuditIDs: Set<UUID> = []
 
     var activeCount: Int { runningWatcherIDs.count }
     var hasFullAccess: Bool { appState.hasFullAccess }
@@ -423,6 +439,7 @@ final class RealtimeSyncViewModel: ObservableObject {
         self.server = server
         self.watchers = appState.syncWatchers.values.filter { $0.serverID == server.id }
         wireSyncManager()
+        startScheduledDriftAudits()
     }
 
     // MARK: - Add watcher
@@ -747,18 +764,24 @@ final class RealtimeSyncViewModel: ObservableObject {
     }
 
     func checkRemoteDrift(_ watcher: SyncWatcher) {
+        let tracked = markDriftCheckStarted(watcherID: watcher.id, at: Date()) ?? watcher
         Task { [weak self] in
             guard let self else { return }
-            await self.detectRemoteDrift(for: watcher)
+            await self.detectRemoteDrift(for: tracked, presentation: .manual)
         }
     }
 
-    private func detectRemoteDrift(for watcher: SyncWatcher) async {
+    private func detectRemoteDrift(
+        for watcher: SyncWatcher,
+        presentation: DriftDetectionPresentation
+    ) async {
         guard let bookmark = watcher.localPathBookmark else {
-            appState.alertItem = AlertItem(
-                title: "无法检测远端漂移",
-                message: "本地目录缺少沙盒授权，请重新添加同步规则。"
-            )
+            if presentation.showsErrors {
+                appState.alertItem = AlertItem(
+                    title: "无法检测远端漂移",
+                    message: "本地目录缺少沙盒授权，请重新添加同步规则。"
+                )
+            }
             return
         }
 
@@ -772,22 +795,28 @@ final class RealtimeSyncViewModel: ObservableObject {
                 bookmarkDataIsStale: &isStale
             )
             guard !isStale else {
-                appState.alertItem = AlertItem(
-                    title: "无法检测远端漂移",
-                    message: "本地目录授权已过期，请重新添加同步规则。"
-                )
+                if presentation.showsErrors {
+                    appState.alertItem = AlertItem(
+                        title: "无法检测远端漂移",
+                        message: "本地目录授权已过期，请重新添加同步规则。"
+                    )
+                }
                 return
             }
         } catch {
-            appState.showError(error)
+            if presentation.showsErrors {
+                appState.showError(error)
+            }
             return
         }
 
         guard url.startAccessingSecurityScopedResource() else {
-            appState.alertItem = AlertItem(
-                title: "无法检测远端漂移",
-                message: "SwiftFTP 无法访问本地目录，请重新添加同步规则。"
-            )
+            if presentation.showsErrors {
+                appState.alertItem = AlertItem(
+                    title: "无法检测远端漂移",
+                    message: "SwiftFTP 无法访问本地目录，请重新添加同步规则。"
+                )
+            }
             return
         }
         defer { url.stopAccessingSecurityScopedResource() }
@@ -810,16 +839,57 @@ final class RealtimeSyncViewModel: ObservableObject {
             if report.hasDrift {
                 driftWarnings.insert((watcher.remotePath, Date()), at: 0)
                 if driftWarnings.count > 20 { driftWarnings.removeLast() }
-                pendingDriftReport = PresentedRemoteDriftReport(watcher: watcher, report: report)
-            } else {
+                if pendingDriftReport == nil {
+                    pendingDriftReport = PresentedRemoteDriftReport(watcher: watcher, report: report)
+                }
+            } else if presentation.showsNoDriftAlert {
                 appState.alertItem = AlertItem(
                     title: "未发现远端漂移",
                     message: "远程目录与本地源目录一致，未发现远程缺失、额外、更新或类型冲突。"
                 )
             }
         } catch {
-            appState.showError(error)
+            if presentation.showsErrors {
+                appState.showError(error)
+            }
         }
+    }
+
+    private func startScheduledDriftAudits() {
+        driftAuditCancellable = Timer.publish(every: 60, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] now in
+                self?.runScheduledDriftAudits(now: now)
+            }
+        driftAuditBootstrapTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            await MainActor.run {
+                self?.runScheduledDriftAudits(now: Date())
+            }
+        }
+    }
+
+    private func runScheduledDriftAudits(now: Date) {
+        let dueWatchers = watchers.filter {
+            SyncDriftAuditPolicy.shouldRun(watcher: $0, now: now) &&
+                !runningDriftAuditIDs.contains($0.id)
+        }
+        for watcher in dueWatchers {
+            let tracked = markDriftCheckStarted(watcherID: watcher.id, at: now) ?? watcher
+            runningDriftAuditIDs.insert(watcher.id)
+            Task { [weak self] in
+                guard let self else { return }
+                await self.detectRemoteDrift(for: tracked, presentation: .scheduled)
+                self.runningDriftAuditIDs.remove(watcher.id)
+            }
+        }
+    }
+
+    private func markDriftCheckStarted(watcherID: UUID, at date: Date) -> SyncWatcher? {
+        guard let idx = watchers.firstIndex(where: { $0.id == watcherID }) else { return nil }
+        watchers[idx].lastDriftCheckAt = date
+        appState.upsertSyncWatcher(watchers[idx])
+        return watchers[idx]
     }
 
     fileprivate func repairRemoteDrift(_ presented: PresentedRemoteDriftReport) async {
@@ -1754,8 +1824,8 @@ struct WatcherRow: View {
                     Image(systemName: "arrow.right").font(.caption2).foregroundColor(.secondary)
                     Text(watcher.remotePath).font(.caption).foregroundColor(.secondary).lineLimit(1)
                 }
-                if let last = watcher.lastSyncAt {
-                    Text("最后同步：\(last.formatted(date: .omitted, time: .shortened))  ·  共 \(watcher.totalSynced) 次")
+                if let statusText {
+                    Text(statusText)
                         .font(.caption2).foregroundColor(.secondary)
                 }
             }
@@ -1782,5 +1852,17 @@ struct WatcherRow: View {
             .buttonStyle(.plain)
         }
         .padding(.vertical, 4)
+    }
+
+    private var statusText: String? {
+        var parts: [String] = []
+        if let last = watcher.lastSyncAt {
+            parts.append("最后同步：\(last.formatted(date: .omitted, time: .shortened))")
+            parts.append("共 \(watcher.totalSynced) 次")
+        }
+        if let lastDriftCheck = watcher.lastDriftCheckAt {
+            parts.append("远端检查：\(lastDriftCheck.formatted(date: .omitted, time: .shortened))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "  ·  ")
     }
 }

@@ -876,9 +876,11 @@ final class SyncWatcherCodingTests: XCTestCase {
         XCTAssertEqual(watchers.first?.mode, .realtimeUpload)
         XCTAssertEqual(watchers.first?.initialSyncPolicy, .futureOnly)
         XCTAssertEqual(watchers.first?.mirrorDeleteEnabled, false)
+        XCTAssertNil(watchers.first?.lastDriftCheckAt)
     }
 
     func test_watcherModeRoundTrips() throws {
+        let lastDriftCheck = Date(timeIntervalSince1970: 2_000)
         let watcher = SyncWatcher(
             id: UUID(),
             serverID: UUID(),
@@ -892,6 +894,7 @@ final class SyncWatcherCodingTests: XCTestCase {
             mirrorDeleteEnabled: true,
             isActive: true,
             lastSyncAt: nil,
+            lastDriftCheckAt: lastDriftCheck,
             totalSynced: 0
         )
 
@@ -900,6 +903,66 @@ final class SyncWatcherCodingTests: XCTestCase {
         XCTAssertEqual(decoded.first?.mode, .oneWayMirror)
         XCTAssertEqual(decoded.first?.initialSyncPolicy, .uploadMissingAndNewer)
         XCTAssertEqual(decoded.first?.mirrorDeleteEnabled, true)
+        XCTAssertEqual(decoded.first?.lastDriftCheckAt, lastDriftCheck)
+    }
+}
+
+final class SyncDriftAuditPolicyTests: XCTestCase {
+
+    func test_activeWatcherWithoutPriorCheckIsDue() {
+        let watcher = makeWatcher(isActive: true, lastDriftCheckAt: nil)
+
+        XCTAssertTrue(SyncDriftAuditPolicy.shouldRun(
+            watcher: watcher,
+            now: Date(timeIntervalSince1970: 1_000)
+        ))
+    }
+
+    func test_inactiveWatcherIsNeverDue() {
+        let watcher = makeWatcher(isActive: false, lastDriftCheckAt: nil)
+
+        XCTAssertFalse(SyncDriftAuditPolicy.shouldRun(
+            watcher: watcher,
+            now: Date(timeIntervalSince1970: 1_000)
+        ))
+    }
+
+    func test_respectsMinimumInterval() {
+        let last = Date(timeIntervalSince1970: 1_000)
+        let watcher = makeWatcher(isActive: true, lastDriftCheckAt: last)
+
+        XCTAssertFalse(SyncDriftAuditPolicy.shouldRun(
+            watcher: watcher,
+            now: last.addingTimeInterval(299),
+            minimumInterval: 300
+        ))
+        XCTAssertTrue(SyncDriftAuditPolicy.shouldRun(
+            watcher: watcher,
+            now: last.addingTimeInterval(300),
+            minimumInterval: 300
+        ))
+    }
+
+    private func makeWatcher(
+        isActive: Bool,
+        lastDriftCheckAt: Date?
+    ) -> SyncWatcher {
+        SyncWatcher(
+            id: UUID(),
+            serverID: UUID(),
+            serverName: "Mac",
+            localPath: "/Users/alice/project",
+            localPathBookmark: nil,
+            remotePath: "/home/alice/project",
+            excludePatterns: [],
+            mode: .oneWayMirror,
+            initialSyncPolicy: .uploadMissingAndNewer,
+            mirrorDeleteEnabled: true,
+            isActive: isActive,
+            lastSyncAt: nil,
+            lastDriftCheckAt: lastDriftCheckAt,
+            totalSynced: 0
+        )
     }
 }
 

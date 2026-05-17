@@ -1340,3 +1340,19 @@ public enum MirrorDeleteSafetyPolicy {
             + incomingDeleteCount > maxDeletes
     }
 }
+
+public enum SyncDriftAuditPolicy {
+    /// Remote drift is detected by polling because FTP/SFTP servers do not
+    /// push file-system events back to SwiftFTP.
+    public static let defaultInterval: TimeInterval = 5 * 60
+
+    public static func shouldRun(
+        watcher: SyncWatcher,
+        now: Date,
+        minimumInterval: TimeInterval = defaultInterval
+    ) -> Bool {
+        guard watcher.isActive else { return false }
+        guard let last = watcher.lastDriftCheckAt else { return true }
+        return now.timeIntervalSince(last) >= minimumInterval
+    }
+}

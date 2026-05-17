@@ -339,6 +339,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
     public var mirrorDeleteEnabled: Bool
     public var isActive: Bool
     public var lastSyncAt: Date?
+    public var lastDriftCheckAt: Date?
     public var totalSynced: Int
 
     public static let defaultExcludePatterns = [
@@ -375,6 +376,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         mirrorDeleteEnabled: Bool = false,
         isActive: Bool,
         lastSyncAt: Date?,
+        lastDriftCheckAt: Date? = nil,
         totalSynced: Int
     ) {
         self.id = id
@@ -389,6 +391,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         self.mirrorDeleteEnabled = mirrorDeleteEnabled
         self.isActive = isActive
         self.lastSyncAt = lastSyncAt
+        self.lastDriftCheckAt = lastDriftCheckAt
         self.totalSynced = totalSynced
     }
 
@@ -405,6 +408,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         case mirrorDeleteEnabled
         case isActive
         case lastSyncAt
+        case lastDriftCheckAt
         case totalSynced
     }
 
@@ -425,6 +429,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         self.mirrorDeleteEnabled = try c.decodeIfPresent(Bool.self, forKey: .mirrorDeleteEnabled) ?? false
         self.isActive = try c.decode(Bool.self, forKey: .isActive)
         self.lastSyncAt = try c.decodeIfPresent(Date.self, forKey: .lastSyncAt)
+        self.lastDriftCheckAt = try c.decodeIfPresent(Date.self, forKey: .lastDriftCheckAt)
         self.totalSynced = try c.decode(Int.self, forKey: .totalSynced)
     }
 }
