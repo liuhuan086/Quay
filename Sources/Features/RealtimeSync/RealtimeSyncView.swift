@@ -11,6 +11,8 @@ actor SyncManager {
     var onFileChange: (@Sendable (FileChangeEvent, SyncWatcher) -> Void)?
     var onBookmarkStale: (@Sendable (SyncWatcher) -> Void)?
     var onScanTruncated: (@Sendable (String, SyncWatcher, Int) -> Void)?
+    var onMirrorDeleteThresholdExceeded: (@Sendable (SyncWatcher, Int, Int) -> Void)?
+    private var mirrorLocalSnapshots: [UUID: [String: Bool]] = [:]
 
     private struct DirectoryScanResult: Sendable {
         let paths: [String]
@@ -50,6 +52,15 @@ actor SyncManager {
                 scopedURLs.append(url)
                 usableWatchers.append(watcher)
                 paths.append(url.path)
+                if isMirrorDeleteEnabled(watcher) {
+                    let matcher = ExclusionMatcher(
+                        patterns: watcher.excludePatterns + SyncWatcher.mandatorySecretExcludes
+                    )
+                    mirrorLocalSnapshots[watcher.id] = localSnapshotIndex(
+                        rootPath: url.path,
+                        matcher: matcher
+                    )
+                }
             } catch {
                 onBookmarkStale?(watcher)
             }
@@ -81,16 +92,22 @@ actor SyncManager {
             url.stopAccessingSecurityScopedResource()
         }
         scopedURLs.removeAll()
+        mirrorLocalSnapshots.removeAll()
     }
 
     private func dispatch(event: FileChangeEvent, watchers: [SyncWatcher]) {
-        guard event.kind != .deleted else { return }
         for w in watchers where isPath(event.path, containedIn: w.localPath) {
             // Mandatory secret excludes are always layered on top of the
             // user's patterns so a cleared exclude box can't leak keys.
             let matcher = ExclusionMatcher(
                 patterns: w.excludePatterns + SyncWatcher.mandatorySecretExcludes
             )
+
+            if event.kind == .deleted {
+                dispatchMirrorDelete(event: event, watcher: w, matcher: matcher)
+                continue
+            }
+
             if event.isDirectory || isDirectory(at: event.path) {
                 let scan = recentlyChangedFiles(in: event.path, matcher: matcher)
                 if scan.wasTruncated {
@@ -101,6 +118,10 @@ actor SyncManager {
                 }
             } else if shouldSyncFile(at: event.path, matcher: matcher) {
                 onFileChange?(event, w)
+            }
+
+            if isMirrorDeleteEnabled(w) {
+                dispatchMissedMirrorDeletes(watcher: w, matcher: matcher)
             }
         }
     }
@@ -181,6 +202,128 @@ actor SyncManager {
     private func isSwiftFTPTempName(_ name: String) -> Bool {
         SwiftFTPTempFile.isTemporaryFileName(name)
     }
+
+    private func isMirrorDeleteEnabled(_ watcher: SyncWatcher) -> Bool {
+        watcher.mode == .oneWayMirror && watcher.mirrorDeleteEnabled
+    }
+
+    private func dispatchMirrorDelete(
+        event: FileChangeEvent,
+        watcher: SyncWatcher,
+        matcher: ExclusionMatcher
+    ) {
+        guard isMirrorDeleteEnabled(watcher),
+              let relativePath = relativePath(event.path, in: watcher.localPath),
+              !relativePath.isEmpty,
+              !SwiftFTPTempFile.isTemporaryPath(relativePath),
+              !matcher.shouldExclude(relativePath) else { return }
+
+        let previous = mirrorLocalSnapshots[watcher.id] ?? [:]
+        let isDirectory = event.isDirectory || previous[relativePath] == true
+        removeFromMirrorSnapshot(watcherID: watcher.id, relativePath: relativePath)
+        onFileChange?(
+            FileChangeEvent(
+                path: localPath(root: watcher.localPath, relative: relativePath),
+                kind: .deleted,
+                isDirectory: isDirectory
+            ),
+            watcher
+        )
+    }
+
+    private func dispatchMissedMirrorDeletes(
+        watcher: SyncWatcher,
+        matcher: ExclusionMatcher
+    ) {
+        let previous = mirrorLocalSnapshots[watcher.id] ?? [:]
+        let current = localSnapshotIndex(rootPath: watcher.localPath, matcher: matcher)
+        let candidates = MirrorLocalSnapshotDiff.deletedCandidates(
+            previous: previous,
+            current: current
+        )
+        mirrorLocalSnapshots[watcher.id] = current
+        guard !candidates.isEmpty else { return }
+
+        if candidates.count > MirrorDeleteSafetyPolicy.maxRealtimeDeletesPerMinute {
+            onMirrorDeleteThresholdExceeded?(
+                watcher,
+                candidates.count,
+                MirrorDeleteSafetyPolicy.maxRealtimeDeletesPerMinute
+            )
+            return
+        }
+
+        for candidate in candidates {
+            onFileChange?(
+                FileChangeEvent(
+                    path: localPath(root: watcher.localPath, relative: candidate.relativePath),
+                    kind: .deleted,
+                    isDirectory: candidate.isDirectory
+                ),
+                watcher
+            )
+        }
+    }
+
+    private func localSnapshotIndex(
+        rootPath: String,
+        matcher: ExclusionMatcher,
+        maxItems: Int = 10_000
+    ) -> [String: Bool] {
+        let rootURL = URL(fileURLWithPath: rootPath, isDirectory: true).standardizedFileURL
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: keys,
+            options: [.skipsPackageDescendants]
+        ) else { return [:] }
+
+        var snapshot: [String: Bool] = [:]
+        for case let fileURL as URL in enumerator {
+            guard snapshot.count < maxItems,
+                  let relative = relativePath(fileURL.path, in: rootPath),
+                  !relative.isEmpty,
+                  !SwiftFTPTempFile.isTemporaryPath(relative) else { continue }
+
+            let values = try? fileURL.resourceValues(forKeys: Set(keys))
+            let isDirectory = values?.isDirectory == true
+            if values?.isSymbolicLink == true {
+                if isDirectory { enumerator.skipDescendants() }
+                continue
+            }
+            if matcher.shouldExclude(relative) {
+                if isDirectory { enumerator.skipDescendants() }
+                continue
+            }
+            if isDirectory || values?.isRegularFile == true {
+                snapshot[relative] = isDirectory
+            }
+        }
+        return snapshot
+    }
+
+    private func removeFromMirrorSnapshot(watcherID: UUID, relativePath: String) {
+        guard var snapshot = mirrorLocalSnapshots[watcherID] else { return }
+        snapshot = snapshot.filter { path, _ in
+            path != relativePath && !path.hasPrefix(relativePath + "/")
+        }
+        mirrorLocalSnapshots[watcherID] = snapshot
+    }
+
+    private func relativePath(_ path: String, in rootPath: String) -> String? {
+        let root = URL(fileURLWithPath: rootPath).standardizedFileURL.path
+        let candidate = URL(fileURLWithPath: path).standardizedFileURL.path
+        if candidate == root { return "" }
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        guard candidate.hasPrefix(prefix) else { return nil }
+        return String(candidate.dropFirst(prefix.count))
+    }
+
+    private func localPath(root: String, relative: String) -> String {
+        let cleanRoot = root.hasSuffix("/") ? String(root.dropLast()) : root
+        let cleanRelative = relative.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return cleanRoot + "/" + cleanRelative
+    }
 }
 
 fileprivate struct PreparedSyncRule: Sendable {
@@ -208,6 +351,7 @@ final class RealtimeSyncViewModel: ObservableObject {
     private let appState: AppState
     private let server: ServerConfig
     private let syncManager = SyncManager()
+    private var mirrorDeleteHistory: [UUID: [Date]] = [:]
 
     var activeCount: Int { runningWatcherIDs.count }
     var hasFullAccess: Bool { appState.hasFullAccess }
@@ -220,6 +364,7 @@ final class RealtimeSyncViewModel: ObservableObject {
     }
 
     // MARK: - Add watcher
+    @discardableResult
     func addWatcher(
         localPath: String,
         localPathBookmark: Data,
@@ -227,19 +372,22 @@ final class RealtimeSyncViewModel: ObservableObject {
         excludePatterns: [String],
         mode: SyncRuleMode = .realtimeUpload,
         initialSyncPolicy: SyncInitialSyncPolicy = .futureOnly,
-        mirrorDeleteEnabled: Bool = false
-    ) {
+        mirrorDeleteEnabled: Bool = false,
+        isActive: Bool = true,
+        refresh: Bool = true
+    ) -> SyncWatcher {
         let w = SyncWatcher(
             id: UUID(), serverID: server.id, serverName: server.displayName,
             localPath: localPath, localPathBookmark: localPathBookmark, remotePath: remotePath,
             excludePatterns: excludePatterns, mode: mode,
             initialSyncPolicy: initialSyncPolicy, mirrorDeleteEnabled: mirrorDeleteEnabled,
-            isActive: true,
+            isActive: isActive,
             lastSyncAt: nil, totalSynced: 0
         )
         watchers.append(w)
         appState.upsertSyncWatcher(w)
-        refreshWatcher()
+        if refresh { refreshWatcher() }
+        return w
     }
 
     /// Full safety-gated creation: path validation → recursive dry-run plan.
@@ -250,18 +398,11 @@ final class RealtimeSyncViewModel: ObservableObject {
         remotePath: String,
         excludePatterns: [String],
         mode: SyncRuleMode,
-        initialSyncPolicy: SyncInitialSyncPolicy
+        initialSyncPolicy: SyncInitialSyncPolicy,
+        mirrorDeleteEnabled: Bool = false
     ) async -> PreparedSyncRule? {
         isValidating = true
         defer { isValidating = false }
-
-        guard mode == .realtimeUpload else {
-            appState.alertItem = AlertItem(
-                title: "镜像模式尚未开放创建",
-                message: "单向镜像需要远程回收站、marker 校验和删除阈值一起上线。当前版本先只允许创建实时上传规则，避免出现看起来是镜像、实际还没有安全删除保护的规则。"
-            )
-            return nil
-        }
 
         let existing = watchers.map { (local: $0.localPath, remote: $0.remotePath) }
         if let error = SyncPathValidator.validate(
@@ -299,12 +440,16 @@ final class RealtimeSyncViewModel: ObservableObject {
             return nil
         }
 
+        let effectiveInitialSyncPolicy: SyncInitialSyncPolicy = mode == .oneWayMirror
+            ? .uploadMissingAndNewer
+            : initialSyncPolicy
         let plan = InitialSyncPlanner.plan(
             localItems: localItems,
             remoteItems: remoteItems,
             options: SyncRuleCreationPolicy.plannerOptions(
-                mode: .realtimeUpload,
-                remoteProtocol: server.protocol_
+                mode: mode,
+                remoteProtocol: server.protocol_,
+                mirrorDeleteAcknowledged: mirrorDeleteEnabled
             )
         )
 
@@ -316,7 +461,16 @@ final class RealtimeSyncViewModel: ObservableObject {
             return nil
         }
 
-        if initialSyncPolicy == .futureOnly {
+        if mode == .oneWayMirror &&
+            plan.remoteDeletes.count > MirrorDeleteSafetyPolicy.maxRealtimeDeletesPerMinute {
+            appState.alertItem = AlertItem(
+                title: "镜像删除数量过多",
+                message: "初始镜像计划需要移动 \(plan.remoteDeletes.count) 个远程项目到回收站，超过当前安全阈值 \(MirrorDeleteSafetyPolicy.maxRealtimeDeletesPerMinute) 个。请先清理远程目录，或选择一个空的专用目录。"
+            )
+            return nil
+        }
+
+        if mode == .realtimeUpload && effectiveInitialSyncPolicy == .futureOnly {
             let shared = SyncRuleCreationPolicy
                 .existingRemoteContentBlockingFutureOnlyCreation(in: plan)
             if !shared.isEmpty {
@@ -336,22 +490,43 @@ final class RealtimeSyncViewModel: ObservableObject {
             remotePath: remotePath,
             excludePatterns: excludePatterns,
             mode: mode,
-            initialSyncPolicy: initialSyncPolicy,
-            mirrorDeleteEnabled: false,
+            initialSyncPolicy: effectiveInitialSyncPolicy,
+            mirrorDeleteEnabled: mode == .oneWayMirror && mirrorDeleteEnabled,
             plan: plan
         )
     }
 
     fileprivate func commitPreparedWatcher(_ prepared: PreparedSyncRule) async {
-        addWatcher(
+        let startsActive = prepared.mode == .realtimeUpload
+        let watcher = addWatcher(
             localPath: prepared.localPath,
             localPathBookmark: prepared.localPathBookmark,
             remotePath: prepared.remotePath,
             excludePatterns: prepared.excludePatterns,
             mode: prepared.mode,
             initialSyncPolicy: prepared.initialSyncPolicy,
-            mirrorDeleteEnabled: prepared.mirrorDeleteEnabled
+            mirrorDeleteEnabled: prepared.mirrorDeleteEnabled,
+            isActive: startsActive,
+            refresh: startsActive
         )
+
+        if prepared.mode == .oneWayMirror {
+            do {
+                try await appState.writeManagedMirrorRootMarker(server: server, watcher: watcher)
+                _ = try await appState.verifyManagedMirrorRoot(
+                    server: server,
+                    watcher: watcher,
+                    performCanary: true
+                )
+                activateWatcher(watcher)
+            } catch {
+                watchers.removeAll { $0.id == watcher.id }
+                appState.removeSyncWatcher(watcher)
+                appState.showError(error)
+                refreshWatcher()
+                return
+            }
+        }
 
         guard prepared.initialSyncPolicy == .uploadMissingAndNewer else { return }
         await appState.createRemoteDirectories(
@@ -370,6 +545,19 @@ final class RealtimeSyncViewModel: ObservableObject {
                 remotePath: remotePath(root: prepared.remotePath, relative: action.relativePath),
                 isAutoSync: true
             )
+        }
+        if prepared.mode == .oneWayMirror {
+            for action in prepared.plan.remoteDeletes {
+                let quarantinedPath = await appState.quarantineRemotePath(
+                    server: server,
+                    watcher: watcher,
+                    targetRemotePath: remotePath(root: prepared.remotePath, relative: action.relativePath)
+                )
+                if quarantinedPath == nil {
+                    syncWatcherFromAppState(watcher)
+                    return
+                }
+            }
         }
     }
 
@@ -467,6 +655,28 @@ final class RealtimeSyncViewModel: ObservableObject {
         refreshWatcher()
     }
 
+    private func activateWatcher(_ watcher: SyncWatcher) {
+        guard let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
+        watchers[idx].isActive = true
+        appState.upsertSyncWatcher(watchers[idx])
+        refreshWatcher()
+    }
+
+    private func pauseWatcher(_ watcher: SyncWatcher, title: String, message: String) {
+        guard let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
+        watchers[idx].isActive = false
+        appState.upsertSyncWatcher(watchers[idx])
+        appState.alertItem = AlertItem(title: title, message: message)
+        refreshWatcher()
+    }
+
+    private func syncWatcherFromAppState(_ watcher: SyncWatcher) {
+        guard let updated = appState.syncWatchers[watcher.id],
+              let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
+        watchers[idx] = updated
+        refreshWatcher()
+    }
+
     // MARK: - Remove watcher
     func remove(_ watcher: SyncWatcher) {
         watchers.removeAll { $0.id == watcher.id }
@@ -482,10 +692,19 @@ final class RealtimeSyncViewModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     let fileName = URL(fileURLWithPath: event.path).lastPathComponent
-                    let relative = String(event.path.dropFirst(watcher.localPath.count))
-                    let remotePath = watcher.remotePath.hasSuffix("/")
-                        ? watcher.remotePath + relative.trimmingCharacters(in: .init(charactersIn: "/"))
-                        : watcher.remotePath + relative
+                    guard let relative = self.relativePath(localPath: event.path, root: watcher.localPath),
+                          !relative.isEmpty else { return }
+                    let remotePath = self.remotePath(root: watcher.remotePath, relative: relative)
+
+                    if event.kind == .deleted {
+                        await self.handleMirrorDelete(
+                            event: event,
+                            watcher: watcher,
+                            remotePath: remotePath,
+                            fileName: fileName
+                        )
+                        return
+                    }
 
                     // Conflict-safe overwrite: if the remote copy is newer
                     // than this local file, skip the upload and surface a
@@ -543,6 +762,15 @@ final class RealtimeSyncViewModel: ObservableObject {
                     )
                 }
             }
+            await syncManager.setMirrorDeleteThresholdCallback { [weak self] watcher, count, limit in
+                Task { @MainActor [weak self] in
+                    self?.pauseWatcher(
+                        watcher,
+                        title: "镜像同步已暂停",
+                        message: "一次本地变化检测到 \(count) 个删除，超过安全阈值 \(limit) 个。请确认本地目录没有误删后，再手动恢复规则。"
+                    )
+                }
+            }
             let runningIDs = await syncManager.start(watchers: initialWatchers)
             Task { @MainActor [weak self] in
                 self?.runningWatcherIDs = runningIDs
@@ -560,6 +788,59 @@ final class RealtimeSyncViewModel: ObservableObject {
             }
         }
     }
+
+    private func handleMirrorDelete(
+        event: FileChangeEvent,
+        watcher: SyncWatcher,
+        remotePath: String,
+        fileName: String
+    ) async {
+        guard watcher.mode == .oneWayMirror, watcher.mirrorDeleteEnabled else { return }
+        let now = Date()
+        let previous = mirrorDeleteHistory[watcher.id] ?? []
+        if MirrorDeleteSafetyPolicy.exceedsRealtimeDeleteThreshold(
+            previousDeleteTimestamps: previous,
+            incomingDeleteCount: 1,
+            now: now
+        ) {
+            pauseWatcher(
+                watcher,
+                title: "镜像同步已暂停",
+                message: "一分钟内检测到超过 \(MirrorDeleteSafetyPolicy.maxRealtimeDeletesPerMinute) 个本地删除。为避免误删扩散，已暂停该规则。"
+            )
+            return
+        }
+        mirrorDeleteHistory[watcher.id] = previous
+            .filter { now.timeIntervalSince($0) <= MirrorDeleteSafetyPolicy.realtimeDeleteWindow }
+            + [now]
+
+        guard let quarantinedPath = await appState.quarantineRemotePath(
+            server: server,
+            watcher: watcher,
+            targetRemotePath: remotePath
+        ) else {
+            syncWatcherFromAppState(watcher)
+            return
+        }
+
+        recentEvents.insert((fileName, Date()), at: 0)
+        if recentEvents.count > 20 { recentEvents.removeLast() }
+        if let i = watchers.firstIndex(where: { $0.id == watcher.id }) {
+            watchers[i].lastSyncAt = Date()
+            watchers[i].totalSynced += 1
+            appState.upsertSyncWatcher(watchers[i])
+        }
+        appState.notifications.sendSyncEvent(fileName: fileName, remotePath: quarantinedPath)
+    }
+
+    private func relativePath(localPath: String, root: String) -> String? {
+        let rootPath = URL(fileURLWithPath: root).standardizedFileURL.path
+        let path = URL(fileURLWithPath: localPath).standardizedFileURL.path
+        if path == rootPath { return "" }
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard path.hasPrefix(prefix) else { return nil }
+        return String(path.dropFirst(prefix.count))
+    }
 }
 
 extension SyncManager {
@@ -573,6 +854,10 @@ extension SyncManager {
 
     func setScanTruncatedCallback(_ callback: @Sendable @escaping (String, SyncWatcher, Int) -> Void) {
         onScanTruncated = callback
+    }
+
+    func setMirrorDeleteThresholdCallback(_ callback: @Sendable @escaping (SyncWatcher, Int, Int) -> Void) {
+        onMirrorDeleteThresholdExceeded = callback
     }
 }
 
@@ -754,11 +1039,12 @@ struct RealtimeSyncView: View {
         if syncMode == .realtimeUpload {
             return "我已了解：创建时会先检查现有文件，有冲突会停止创建。"
         }
-        return "我已了解：镜像模式未来可能删除远程文件。"
+        return "我已了解：镜像模式会把本地删除同步到远程回收站。"
     }
 
     private var canCreateSelectedMode: Bool {
-        syncMode == .realtimeUpload
+        syncMode == .realtimeUpload ||
+            (mirrorDeleteAcknowledged && mirrorDedicatedRootAcknowledged)
     }
 
     // MARK: - Empty state
@@ -840,11 +1126,11 @@ struct RealtimeSyncView: View {
                     .font(.caption)
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("镜像模式会在后续安全步骤开放创建；当前暂不创建实际规则。")
+                        Text("镜像模式会创建 marker，并把远程删除先移动到 SwiftFTP 回收站。")
                             .font(.caption2)
                             .foregroundColor(.orange)
                         Toggle(isOn: $mirrorDeleteAcknowledged) {
-                            Text("我理解：镜像模式中本地删除会删除远程对应文件。")
+                            Text("我理解：镜像模式中本地删除会移动远程对应文件。")
                                 .font(.caption)
                         }
                         .toggleStyle(.checkbox)
@@ -881,8 +1167,8 @@ struct RealtimeSyncView: View {
                     Label("创建时会先生成 dry-run 计划；有冲突会停止创建。", systemImage: "exclamationmark.triangle")
                 } else {
                     Label("单向镜像会让本地作为唯一源。", systemImage: "arrow.right.circle")
-                    Label("本地删除未来会删除远程对应文件。", systemImage: "trash")
-                    Label("删除执行需要远程回收站与 marker 校验，当前不会创建实际镜像规则。", systemImage: "exclamationmark.triangle")
+                    Label("本地删除会把远程对应文件移动到 SwiftFTP 回收站。", systemImage: "trash")
+                    Label("删除执行前会校验 marker、canary 与删除阈值。", systemImage: "exclamationmark.triangle")
                 }
             }
             .font(.caption2)
@@ -929,7 +1215,10 @@ struct RealtimeSyncView: View {
                         remotePath: remotePath,
                         excludePatterns: patterns,
                         mode: syncMode,
-                        initialSyncPolicy: initialSyncPolicy
+                        initialSyncPolicy: initialSyncPolicy,
+                        mirrorDeleteEnabled: syncMode == .oneWayMirror
+                            && mirrorDeleteAcknowledged
+                            && mirrorDedicatedRootAcknowledged
                     ) {
                         pendingCreation = prepared
                         showPlanConfirm = true
@@ -981,12 +1270,16 @@ struct RealtimeSyncView: View {
             "覆盖远程文件：\(plan.overwrites.count)"
         ]
         if prepared.mode == .oneWayMirror {
-            lines.append("计划删除远程：\(plan.remoteDeletes.count)")
+            lines.append("计划移入远程回收站：\(plan.remoteDeletes.count)")
         }
         lines.append("跳过：\(plan.skipped.count)")
         if prepared.initialSyncPolicy == .uploadMissingAndNewer {
             lines.append("")
-            lines.append("确认后会把上传任务加入传输队列。")
+            if prepared.mode == .oneWayMirror {
+                lines.append("确认后会写入 marker，执行 canary，把远程独有项目移入 SwiftFTP 回收站，并把上传任务加入传输队列。")
+            } else {
+                lines.append("确认后会把上传任务加入传输队列。")
+            }
         } else {
             lines.append("")
             lines.append("确认后只监控后续修改，不上传现有文件。")

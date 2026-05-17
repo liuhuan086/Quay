@@ -222,7 +222,7 @@ public enum SyncPathValidator {
             return .remoteNotAbsolute(trimmed)
         }
 
-        let norm = displayRemotePath(trimmed)
+        let norm = normalizedRemoteDisplayPath(trimmed)
         let canonical = canonicalRemotePath(trimmed)
 
         if forbiddenRemoteExact.contains(canonical) {
@@ -245,7 +245,7 @@ public enum SyncPathValidator {
         normalizeRemotePath(raw, foldCase: true)
     }
 
-    private static func displayRemotePath(_ raw: String) -> String {
+    public static func normalizedRemoteDisplayPath(_ raw: String) -> String {
         normalizeRemotePath(raw, foldCase: false)
     }
 
@@ -972,6 +972,7 @@ public enum ManagedMirrorRootError: LocalizedError, Equatable, Sendable {
 public enum ManagedMirrorRoot {
     public static let markerFileName = ".swiftftp-mirror.json"
     public static let canaryPrefix = ".swiftftp-canary-"
+    public static let trashDirectoryName = ".swiftftp-trash"
 
     public static func marker(
         for watcher: SyncWatcher,
@@ -998,6 +999,30 @@ public enum ManagedMirrorRoot {
 
     public static func canaryFinalPath(remoteRoot: String, ruleID: UUID) -> String {
         join(remoteRoot: remoteRoot, child: "\(canaryPrefix)\(ruleID.uuidString).ok")
+    }
+
+    public static func trashPath(
+        remoteRoot: String,
+        ruleID: UUID,
+        targetRemotePath: String,
+        timestamp: Date = Date()
+    ) throws -> String {
+        guard contains(targetRemotePath, inRemoteRoot: remoteRoot) else {
+            throw ManagedMirrorRootError.destructivePathOutsideManagedRoot(
+                path: SyncPathValidator.canonicalRemotePath(targetRemotePath),
+                root: SyncPathValidator.canonicalRemotePath(remoteRoot)
+            )
+        }
+        let relativePath = relativePathInsideRoot(
+            remotePath: targetRemotePath,
+            remoteRoot: remoteRoot
+        )
+        let trashRoot = join(
+            remoteRoot: remoteRoot,
+            child: "\(trashDirectoryName)/\(ruleID.uuidString)/\(timestampFolder(timestamp))"
+        )
+        guard !relativePath.isEmpty else { return trashRoot }
+        return join(remoteRoot: trashRoot, child: relativePath)
     }
 
     public static func validate(
@@ -1053,8 +1078,107 @@ public enum ManagedMirrorRoot {
     }
 
     private static func join(remoteRoot: String, child: String) -> String {
-        let root = SyncPathValidator.canonicalRemotePath(remoteRoot)
+        let root = SyncPathValidator.normalizedRemoteDisplayPath(remoteRoot)
         if root == "/" { return "/" + child }
         return root.hasSuffix("/") ? root + child : root + "/" + child
+    }
+
+    private static func relativePathInsideRoot(remotePath: String, remoteRoot: String) -> String {
+        let root = SyncPathValidator.normalizedRemoteDisplayPath(remoteRoot)
+        let path = SyncPathValidator.normalizedRemoteDisplayPath(remotePath)
+        if path == root { return "" }
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        if path.hasPrefix(prefix) {
+            return String(path.dropFirst(prefix.count))
+        }
+
+        let canonicalRoot = SyncPathValidator.canonicalRemotePath(remoteRoot)
+        let canonicalPath = SyncPathValidator.canonicalRemotePath(remotePath)
+        let canonicalPrefix = canonicalRoot.hasSuffix("/") ? canonicalRoot : canonicalRoot + "/"
+        guard canonicalPath.hasPrefix(canonicalPrefix) else { return "" }
+        let rootComponents = remotePathComponents(remoteRoot)
+        let pathComponents = remotePathComponents(remotePath)
+        guard pathComponents.count >= rootComponents.count else { return "" }
+        return pathComponents.dropFirst(rootComponents.count).joined(separator: "/")
+    }
+
+    private static func remotePathComponents(_ raw: String) -> [String] {
+        SyncPathValidator.normalizedRemoteDisplayPath(raw)
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+    }
+
+    private static func timestampFolder(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss.SSS'Z'"
+        return formatter.string(from: date)
+    }
+}
+
+public struct MirrorDeleteCandidate: Equatable, Sendable {
+    public var relativePath: String
+    public var isDirectory: Bool
+
+    public init(relativePath: String, isDirectory: Bool) {
+        self.relativePath = relativePath
+        self.isDirectory = isDirectory
+    }
+}
+
+public enum MirrorLocalSnapshotDiff {
+    public static func deletedCandidates(
+        previous: [String: Bool],
+        current: [String: Bool]
+    ) -> [MirrorDeleteCandidate] {
+        let missing = previous.keys
+            .filter { current[$0] == nil }
+            .sorted { lhs, rhs in
+                let leftDepth = lhs.split(separator: "/").count
+                let rightDepth = rhs.split(separator: "/").count
+                return leftDepth == rightDepth ? lhs < rhs : leftDepth < rightDepth
+            }
+
+        var collapsed: [MirrorDeleteCandidate] = []
+        for path in missing {
+            if collapsed.contains(where: { isSameOrNestedChild(path, of: $0.relativePath) }) {
+                continue
+            }
+            collapsed.append(
+                MirrorDeleteCandidate(relativePath: path, isDirectory: previous[path] ?? false)
+            )
+        }
+        return collapsed
+    }
+
+    private static func isSameOrNestedChild(_ path: String, of parent: String) -> Bool {
+        path == parent || path.hasPrefix(parent + "/")
+    }
+}
+
+public enum MirrorDeleteSafetyPolicy {
+    public static let maxRealtimeDeletesPerMinute = 10
+    public static let realtimeDeleteWindow: TimeInterval = 60
+
+    public static func recentDeleteCount(
+        _ timestamps: [Date],
+        now: Date,
+        window: TimeInterval = realtimeDeleteWindow
+    ) -> Int {
+        let cutoff = now.addingTimeInterval(-window)
+        return timestamps.filter { $0 >= cutoff }.count
+    }
+
+    public static func exceedsRealtimeDeleteThreshold(
+        previousDeleteTimestamps: [Date],
+        incomingDeleteCount: Int,
+        now: Date,
+        maxDeletes: Int = maxRealtimeDeletesPerMinute,
+        window: TimeInterval = realtimeDeleteWindow
+    ) -> Bool {
+        recentDeleteCount(previousDeleteTimestamps, now: now, window: window)
+            + incomingDeleteCount > maxDeletes
     }
 }

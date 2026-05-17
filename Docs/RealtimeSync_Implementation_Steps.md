@@ -130,6 +130,13 @@ Acceptance:
 
 ## Step 6: Realtime Mirror Execution
 
+Status:
+
+- Mirror rules can now be activated after marker + canary verification.
+- Local delete events in one-way mirror mode move matching remote paths into `.swiftftp-trash/<rule-id>/<timestamp>/...`.
+- Snapshot diffing detects missed local deletes after later FSEvents, collapses directory children, and pauses when a delete burst exceeds the safety threshold.
+- Initial mirror creation quarantines remote-only paths from the dry-run plan before considering the rule live.
+
 Scope:
 
 - Implement source-authoritative remote deletes for local delete events.

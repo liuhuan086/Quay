@@ -15,13 +15,13 @@ Most of this document is the **target** model. Track what is actually shipped he
 - Add-rule sheet: upload-only / no-delete / folder-behavior disclosure, required acknowledgement checkbox, second confirm echoing exact roots.
 - Directory-event scan skips symlinks and app temp files, and caps a single burst at 500 files.
 
-**Honest deviation from this doc:** mirror deletion is **not** implemented and local-delete events are hard-blocked in `RealtimeSyncView` `dispatch()`. Because remote deletion cannot occur, the rule-creation flow does **not** show a "remote files may be deleted" warning (that would be a false warning); it warns about the real risk — same-name remote overwrite. The "Rule Creation Safety" deletion-acknowledgement requirement below applies only once mirror mode actually ships.
+**Mirror execution now shipped through Step 6:** one-way mirror rules can be created only after the user acknowledges deletion risk and a dedicated remote root. SwiftFTP writes `.swiftftp-mirror.json`, verifies it with a canary operation, uploads missing/newer local files from the dry-run plan, and moves remote-only or locally deleted paths into `.swiftftp-trash/<rule-id>/<timestamp>/...` instead of permanently deleting them.
 
-**Not yet implemented (still target-only):** one-way mirror mode, opt-in remote deletion, initial mirror sync planner execution for mirror rules, `.swiftftp-trash` quarantine, delete thresholds, B-side drift detection ("B missing → ask A"), and rule state machine. The Acceptance Criteria section is the gate for that future phase.
+**Not yet implemented (still target-only):** B-side drift detection ("B missing → ask A"), manual repair actions, scheduled drift checks, full rule state machine, and stale-trash cleanup. The Acceptance Criteria section is the gate for those future phases.
 
 **Additional shipped guardrail:** upload tasks now write to `<filename>.__swiftftp_tmp__` and rename into place on success. SwiftFTP temp files are ignored by watchers, local/remote snapshots, and default excludes. Stale-temp cleanup is intentionally not enabled until managed-root scoping exists.
 
-**Managed-root infrastructure shipped:** SwiftFTP can create/read `.swiftftp-mirror.json`, validate rule ID, canonical remote root, schema version, and mode, reject destructive targets outside the managed root, and run a SwiftFTP-owned canary create/rename/delete check. Mirror delete execution is still gated until Step 6.
+**Managed-root and quarantine guardrails shipped:** SwiftFTP can create/read `.swiftftp-mirror.json`, validate rule ID, canonical remote root, schema version, and mode, reject destructive targets outside the managed root, run a SwiftFTP-owned canary create/rename/delete check, and quarantine mirror deletes under `.swiftftp-trash`.
 
 ## Review Findings From Latest Sync Guardrail Pass
 

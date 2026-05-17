@@ -558,15 +558,15 @@ final class ManagedMirrorRootTests: XCTestCase {
 
         XCTAssertEqual(
             ManagedMirrorRoot.markerPath(remoteRoot: "/Users/liuhuan/Downloads/docs"),
-            "/users/liuhuan/downloads/docs/.swiftftp-mirror.json"
+            "/Users/liuhuan/Downloads/docs/.swiftftp-mirror.json"
         )
         XCTAssertEqual(
             ManagedMirrorRoot.canaryTemporaryPath(remoteRoot: "/Users/liuhuan/Downloads/docs", ruleID: id),
-            "/users/liuhuan/downloads/docs/.swiftftp-canary-00000000-0000-0000-0000-000000000001.tmp"
+            "/Users/liuhuan/Downloads/docs/.swiftftp-canary-00000000-0000-0000-0000-000000000001.tmp"
         )
         XCTAssertEqual(
             ManagedMirrorRoot.canaryFinalPath(remoteRoot: "/Users/liuhuan/Downloads/docs", ruleID: id),
-            "/users/liuhuan/downloads/docs/.swiftftp-canary-00000000-0000-0000-0000-000000000001.ok"
+            "/Users/liuhuan/Downloads/docs/.swiftftp-canary-00000000-0000-0000-0000-000000000001.ok"
         )
     }
 
@@ -638,6 +638,46 @@ final class ManagedMirrorRootTests: XCTestCase {
         ))
     }
 
+    func test_trashPathPreservesDisplayRootAndRejectsEscapes() throws {
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let timestamp = Date(timeIntervalSince1970: 0)
+
+        let trashPath = try ManagedMirrorRoot.trashPath(
+            remoteRoot: "/Users/liuhuan/Downloads/docs",
+            ruleID: id,
+            targetRemotePath: "/Users/liuhuan/Downloads/docs/Sources/Main.swift",
+            timestamp: timestamp
+        )
+
+        XCTAssertEqual(
+            trashPath,
+            "/Users/liuhuan/Downloads/docs/.swiftftp-trash/00000000-0000-0000-0000-000000000002/19700101T000000.000Z/Sources/Main.swift"
+        )
+        XCTAssertThrowsError(try ManagedMirrorRoot.trashPath(
+            remoteRoot: "/Users/liuhuan/Downloads/docs",
+            ruleID: id,
+            targetRemotePath: "/Users/liuhuan/Downloads/docs-backup/Main.swift",
+            timestamp: timestamp
+        ))
+    }
+
+    func test_trashPathPreservesTargetRelativeCaseForCaseOnlyRootMismatch() throws {
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
+        let timestamp = Date(timeIntervalSince1970: 0)
+
+        let trashPath = try ManagedMirrorRoot.trashPath(
+            remoteRoot: "/Users/liuhuan/Downloads/docs",
+            ruleID: id,
+            targetRemotePath: "/users/liuhuan/downloads/docs/Sources/Main.swift",
+            timestamp: timestamp
+        )
+
+        XCTAssertEqual(
+            trashPath,
+            "/Users/liuhuan/Downloads/docs/.swiftftp-trash/00000000-0000-0000-0000-000000000003/19700101T000000.000Z/Sources/Main.swift"
+        )
+    }
+
     private func mirrorWatcher(
         id: UUID = UUID(),
         remotePath: String
@@ -656,6 +696,72 @@ final class ManagedMirrorRootTests: XCTestCase {
             isActive: true,
             lastSyncAt: nil,
             totalSynced: 0
+        )
+    }
+}
+
+final class MirrorLocalSnapshotDiffTests: XCTestCase {
+
+    func test_deletedCandidatesCollapseChildrenOfDeletedDirectories() {
+        let previous = [
+            "Sources": true,
+            "Sources/Main.swift": false,
+            "Sources/Views": true,
+            "Sources/Views/AppView.swift": false,
+            "Docs/guide.md": false,
+            "README.md": false
+        ]
+        let current = [
+            "README.md": false
+        ]
+
+        XCTAssertEqual(
+            MirrorLocalSnapshotDiff.deletedCandidates(previous: previous, current: current),
+            [
+                MirrorDeleteCandidate(relativePath: "Sources", isDirectory: true),
+                MirrorDeleteCandidate(relativePath: "Docs/guide.md", isDirectory: false)
+            ]
+        )
+    }
+
+    func test_deletedCandidatesAreEmptyWhenSnapshotOnlyGainsFiles() {
+        XCTAssertEqual(
+            MirrorLocalSnapshotDiff.deletedCandidates(
+                previous: ["README.md": false],
+                current: ["README.md": false, "Sources/Main.swift": false]
+            ),
+            []
+        )
+    }
+}
+
+final class MirrorDeleteSafetyPolicyTests: XCTestCase {
+
+    func test_exceedsRealtimeDeleteThresholdCountsOnlyRecentEvents() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let previous = [
+            now.addingTimeInterval(-10),
+            now.addingTimeInterval(-20),
+            now.addingTimeInterval(-70)
+        ]
+
+        XCTAssertEqual(
+            MirrorDeleteSafetyPolicy.recentDeleteCount(previous, now: now),
+            2
+        )
+        XCTAssertFalse(
+            MirrorDeleteSafetyPolicy.exceedsRealtimeDeleteThreshold(
+                previousDeleteTimestamps: previous,
+                incomingDeleteCount: 8,
+                now: now
+            )
+        )
+        XCTAssertTrue(
+            MirrorDeleteSafetyPolicy.exceedsRealtimeDeleteThreshold(
+                previousDeleteTimestamps: previous,
+                incomingDeleteCount: 9,
+                now: now
+            )
         )
     }
 }

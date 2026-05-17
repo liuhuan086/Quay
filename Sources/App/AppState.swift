@@ -376,6 +376,45 @@ final class AppState: ObservableObject {
         }
     }
 
+    func quarantineRemotePath(
+        server: ServerConfig,
+        watcher: SyncWatcher,
+        targetRemotePath: String,
+        timestamp: Date = Date()
+    ) async -> String? {
+        do {
+            let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+            let client = try await pool.borrowClient(password: server.password)
+            defer { Task { await pool.returnClient(client) } }
+
+            let marker = try await readManagedMirrorRootMarker(
+                remoteRoot: watcher.remotePath,
+                using: client
+            )
+            try ManagedMirrorRoot.validate(marker: marker, for: watcher)
+            try await runManagedMirrorCanary(remoteRoot: watcher.remotePath, ruleID: watcher.id, using: client)
+            try ManagedMirrorRoot.validateDestructiveTarget(targetRemotePath, for: marker)
+
+            let trashPath = try ManagedMirrorRoot.trashPath(
+                remoteRoot: watcher.remotePath,
+                ruleID: watcher.id,
+                targetRemotePath: targetRemotePath,
+                timestamp: timestamp
+            )
+            try ManagedMirrorRoot.validateDestructiveTarget(trashPath, for: marker)
+            await ensureRemoteParentDirectories(for: trashPath, using: client)
+            do {
+                try await client.rename(from: targetRemotePath, to: trashPath)
+            } catch where Self.isRemoteMissingPathError(error) {
+                return targetRemotePath
+            }
+            return trashPath
+        } catch {
+            pauseMirrorWatcher(watcher, reason: error)
+            return nil
+        }
+    }
+
     private func writeManagedMirrorRootMarker(
         _ marker: ManagedMirrorRootMarker,
         remoteRoot: String,
@@ -494,6 +533,28 @@ final class AppState: ObservableObject {
             lower.contains("not exist") ||
             lower.contains("failed to change directory")
         )
+    }
+
+    private static func isRemoteMissingPathError(_ error: Error) -> Bool {
+        if case FTPError.fileNotFound = error { return true }
+        guard case FTPError.badResponse(let message) = error else { return false }
+        let lower = message.lowercased()
+        return lower.contains("550") && (
+            lower.contains("not found") ||
+            lower.contains("no such") ||
+            lower.contains("not exist")
+        )
+    }
+
+    private func ensureRemoteParentDirectories(for remotePath: String, using client: any AnyFTPClient) async {
+        for directory in TransferEngine.remoteParentDirectories(for: remotePath) {
+            do {
+                try await client.createDirectory(directory)
+            } catch {
+                // Existing parents and protected ancestors often report errors.
+                // The final rename/upload surfaces real permission failures.
+            }
+        }
     }
 
     private static func joinRemotePath(root: String, relative: String) -> String {
