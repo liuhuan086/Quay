@@ -11,10 +11,10 @@ actor SyncManager {
     var onFileChange: (@Sendable (FileChangeEvent, SyncWatcher) -> Void)?
     var onBookmarkStale: (@Sendable (SyncWatcher) -> Void)?
 
-    func start(watchers: [SyncWatcher]) {
+    func start(watchers: [SyncWatcher]) -> Set<UUID> {
         stopAll()
         let active = watchers.filter { $0.isActive }
-        guard !active.isEmpty else { return }
+        guard !active.isEmpty else { return [] }
 
         var usableWatchers: [SyncWatcher] = []
         var paths: [String] = []
@@ -36,18 +36,19 @@ actor SyncManager {
                     onBookmarkStale?(watcher)
                     continue
                 }
-                if url.startAccessingSecurityScopedResource() {
-                    scopedURLs.append(url)
+                guard url.startAccessingSecurityScopedResource() else {
+                    onBookmarkStale?(watcher)
+                    continue
                 }
+                scopedURLs.append(url)
                 usableWatchers.append(watcher)
                 paths.append(url.path)
             } catch {
                 onBookmarkStale?(watcher)
             }
         }
-        guard !paths.isEmpty else { return }
+        guard !paths.isEmpty else { return [] }
         let dispatchWatchers = usableWatchers
-        watcher.startWatching(paths: paths)
 
         watcher.eventPublisher
             .receive(on: RunLoop.main)
@@ -57,6 +58,13 @@ actor SyncManager {
                 }
             }
             .store(in: &cancellables)
+
+        guard watcher.startWatching(paths: paths) else {
+            stopAll()
+            usableWatchers.forEach { onBookmarkStale?($0) }
+            return []
+        }
+        return Set(usableWatchers.map(\.id))
     }
 
     func stopAll() {
@@ -69,10 +77,14 @@ actor SyncManager {
     }
 
     private func dispatch(event: FileChangeEvent, watchers: [SyncWatcher]) {
-        guard event.kind != .deleted, !event.isDirectory else { return }
+        guard event.kind != .deleted else { return }
         for w in watchers where isPath(event.path, containedIn: w.localPath) {
             let matcher = ExclusionMatcher(patterns: w.excludePatterns)
-            if !matcher.shouldExclude(event.path) {
+            if event.isDirectory || isDirectory(at: event.path) {
+                for path in recentlyChangedFiles(in: event.path, matcher: matcher) {
+                    onFileChange?(FileChangeEvent(path: path, kind: event.kind, isDirectory: false), w)
+                }
+            } else if shouldSyncFile(at: event.path, matcher: matcher) {
                 onFileChange?(event, w)
             }
         }
@@ -90,6 +102,48 @@ actor SyncManager {
         guard normalized != "/" else { return normalized }
         return normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
+
+    private func shouldSyncFile(at path: String, matcher: ExclusionMatcher) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return false }
+        return !matcher.shouldExclude(path)
+    }
+
+    private func isDirectory(at path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+    }
+
+    private func recentlyChangedFiles(in directoryPath: String, matcher: ExclusionMatcher) -> [String] {
+        let rootURL = URL(fileURLWithPath: directoryPath, isDirectory: true)
+        let cutoff = Date().addingTimeInterval(-30)
+        let keys: [URLResourceKey] = [
+            .isRegularFileKey,
+            .contentModificationDateKey,
+            .creationDateKey
+        ]
+        guard let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: keys,
+            options: [.skipsPackageDescendants]
+        ) else { return [] }
+
+        var paths: [String] = []
+        for case let fileURL as URL in enumerator {
+            let path = fileURL.path
+            if matcher.shouldExclude(path) { continue }
+            guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true else { continue }
+            let modifiedRecently = values.contentModificationDate.map { $0 >= cutoff } ?? false
+            let createdRecently = values.creationDate.map { $0 >= cutoff } ?? false
+            if modifiedRecently || createdRecently {
+                paths.append(path)
+            }
+        }
+        return paths
+    }
 }
 
 // MARK: - RealtimeSyncViewModel
@@ -98,12 +152,13 @@ final class RealtimeSyncViewModel: ObservableObject {
     @Published var watchers: [SyncWatcher] = []
     @Published var showAddSheet = false
     @Published var recentEvents: [(String, Date)] = []   // (filename, time)
+    @Published private var runningWatcherIDs: Set<UUID> = []
 
     private let appState: AppState
     private let server: ServerConfig
     private let syncManager = SyncManager()
 
-    var activeCount: Int { watchers.filter { $0.isActive }.count }
+    var activeCount: Int { runningWatcherIDs.count }
     var hasFullAccess: Bool { appState.hasFullAccess }
 
     init(appState: AppState, server: ServerConfig) {
@@ -118,11 +173,12 @@ final class RealtimeSyncViewModel: ObservableObject {
         let w = SyncWatcher(
             id: UUID(), serverID: server.id, serverName: server.displayName,
             localPath: localPath, localPathBookmark: localPathBookmark, remotePath: remotePath,
-            excludePatterns: excludePatterns, isActive: false,
+            excludePatterns: excludePatterns, isActive: true,
             lastSyncAt: nil, totalSynced: 0
         )
         watchers.append(w)
         appState.upsertSyncWatcher(w)
+        refreshWatcher()
     }
 
     // MARK: - Toggle active
@@ -142,6 +198,7 @@ final class RealtimeSyncViewModel: ObservableObject {
 
     // MARK: - Wire sync events
     private func wireSyncManager() {
+        let initialWatchers = watchers
         Task {
             await syncManager.setCallback { [weak self] event, watcher in
                 Task { @MainActor [weak self] in
@@ -178,11 +235,22 @@ final class RealtimeSyncViewModel: ObservableObject {
                     )
                 }
             }
+            let runningIDs = await syncManager.start(watchers: initialWatchers)
+            Task { @MainActor [weak self] in
+                self?.runningWatcherIDs = runningIDs
+            }
         }
     }
 
     private func refreshWatcher() {
-        Task { await syncManager.start(watchers: watchers) }
+        let currentWatchers = watchers
+        Task { [weak self] in
+            guard let self else { return }
+            let runningIDs = await syncManager.start(watchers: currentWatchers)
+            await MainActor.run {
+                self.runningWatcherIDs = runningIDs
+            }
+        }
     }
 }
 

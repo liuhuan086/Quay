@@ -107,6 +107,30 @@ final class TransferTaskTests: XCTestCase {
     }
 }
 
+final class TransferEnginePathTests: XCTestCase {
+
+    func test_remoteParentDirectories_absolutePath() {
+        let directories = TransferEngine.remoteParentDirectories(
+            for: "/Users/liuhuan/Downloads/docs/report.txt"
+        )
+        XCTAssertEqual(directories, [
+            "/Users",
+            "/Users/liuhuan",
+            "/Users/liuhuan/Downloads",
+            "/Users/liuhuan/Downloads/docs"
+        ])
+    }
+
+    func test_remoteParentDirectories_relativePath() {
+        let directories = TransferEngine.remoteParentDirectories(for: "docs/reports/report.txt")
+        XCTAssertEqual(directories, ["docs", "docs/reports"])
+    }
+
+    func test_remoteParentDirectories_fileInCurrentDirectory() {
+        XCTAssertEqual(TransferEngine.remoteParentDirectories(for: "report.txt"), [])
+    }
+}
+
 // MARK: - TransferProgress Tests
 final class TransferProgressTests: XCTestCase {
 
