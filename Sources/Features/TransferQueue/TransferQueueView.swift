@@ -131,8 +131,10 @@ struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 28) {
             Spacer()
-            Image(systemName: "arrow.up.arrow.down.circle")
-                .font(.system(size: 72)).foregroundStyle(.blue.gradient)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 104, height: 104)
+                .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
 
             VStack(spacing: 6) {
                 Text("SwiftFTP").font(.largeTitle).bold()
