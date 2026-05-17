@@ -237,6 +237,41 @@ final class AppState: ObservableObject {
         connectionStates[server.id] = .disconnected
     }
 
+    // MARK: - Remote inspection (used by sync safety checks)
+
+    /// Lists a remote directory, borrowing/returning a pooled connection.
+    /// A missing directory is reported as empty (no collision) rather than
+    /// an error, so a brand-new dedicated remote target is allowed.
+    func remoteDirectoryNames(server: ServerConfig, path: String) async throws -> Set<String> {
+        let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+        let client = try await pool.borrowClient(password: server.password)
+        defer { Task { await pool.returnClient(client) } }
+        do {
+            let items = try await client.listDirectory(path)
+            return Set(items.map { $0.name })
+        } catch FTPError.fileNotFound(_) {
+            return []
+        }
+    }
+
+    /// Best-effort remote modification date for a single file. Returns nil on
+    /// any failure so the caller can fall back to normal upload behavior
+    /// instead of stalling the user's workflow.
+    func remoteFileModifiedDate(server: ServerConfig, remotePath: String) async -> Date? {
+        let parent = (remotePath as NSString).deletingLastPathComponent
+        let name = (remotePath as NSString).lastPathComponent
+        guard !name.isEmpty else { return nil }
+        do {
+            let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+            let client = try await pool.borrowClient(password: server.password)
+            defer { Task { await pool.returnClient(client) } }
+            let items = try await client.listDirectory(parent.isEmpty ? "/" : parent)
+            return items.first(where: { $0.name == name })?.modifiedDate
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Enqueue Transfer
     func enqueue(
         server: ServerConfig,

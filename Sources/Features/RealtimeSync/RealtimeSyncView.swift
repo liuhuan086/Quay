@@ -79,7 +79,11 @@ actor SyncManager {
     private func dispatch(event: FileChangeEvent, watchers: [SyncWatcher]) {
         guard event.kind != .deleted else { return }
         for w in watchers where isPath(event.path, containedIn: w.localPath) {
-            let matcher = ExclusionMatcher(patterns: w.excludePatterns)
+            // Mandatory secret excludes are always layered on top of the
+            // user's patterns so a cleared exclude box can't leak keys.
+            let matcher = ExclusionMatcher(
+                patterns: w.excludePatterns + SyncWatcher.mandatorySecretExcludes
+            )
             if event.isDirectory || isDirectory(at: event.path) {
                 for path in recentlyChangedFiles(in: event.path, matcher: matcher) {
                     onFileChange?(FileChangeEvent(path: path, kind: event.kind, isDirectory: false), w)
@@ -104,6 +108,11 @@ actor SyncManager {
     }
 
     private func shouldSyncFile(at path: String, matcher: ExclusionMatcher) -> Bool {
+        let name = (path as NSString).lastPathComponent
+        if name.hasPrefix(".__swiftftp_tmp__") { return false }
+        if let values = try? URL(fileURLWithPath: path)
+            .resourceValues(forKeys: [.isSymbolicLinkKey]),
+           values.isSymbolicLink == true { return false }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return false }
@@ -121,6 +130,7 @@ actor SyncManager {
         let cutoff = Date().addingTimeInterval(-30)
         let keys: [URLResourceKey] = [
             .isRegularFileKey,
+            .isSymbolicLinkKey,
             .contentModificationDateKey,
             .creationDateKey
         ]
@@ -130,11 +140,17 @@ actor SyncManager {
             options: [.skipsPackageDescendants]
         ) else { return [] }
 
+        // Cap a single directory-event burst so a large move/extract can't
+        // blast thousands of uploads in one go.
+        let burstLimit = 500
         var paths: [String] = []
         for case let fileURL as URL in enumerator {
+            if paths.count >= burstLimit { break }
             let path = fileURL.path
+            if (path as NSString).lastPathComponent.hasPrefix(".__swiftftp_tmp__") { continue }
             if matcher.shouldExclude(path) { continue }
             guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
+                  values.isSymbolicLink != true,
                   values.isRegularFile == true else { continue }
             let modifiedRecently = values.contentModificationDate.map { $0 >= cutoff } ?? false
             let createdRecently = values.creationDate.map { $0 >= cutoff } ?? false
@@ -152,6 +168,8 @@ final class RealtimeSyncViewModel: ObservableObject {
     @Published var watchers: [SyncWatcher] = []
     @Published var showAddSheet = false
     @Published var recentEvents: [(String, Date)] = []   // (filename, time)
+    @Published var conflicts: [(String, Date)] = []      // skipped: remote newer
+    @Published var isValidating = false
     @Published private var runningWatcherIDs: Set<UUID> = []
 
     private let appState: AppState
@@ -181,6 +199,75 @@ final class RealtimeSyncViewModel: ObservableObject {
         refreshWatcher()
     }
 
+    /// Full safety-gated creation: path validation → remote same-name
+    /// collision block → persist. Returns true only when the rule was
+    /// created; otherwise an explanatory alert is shown and nothing is saved.
+    func validateAndAddWatcher(
+        localPath: String,
+        localPathBookmark: Data,
+        remotePath: String,
+        excludePatterns: [String]
+    ) async -> Bool {
+        isValidating = true
+        defer { isValidating = false }
+
+        let existing = watchers.map { (local: $0.localPath, remote: $0.remotePath) }
+        if let error = SyncPathValidator.validate(
+            localPath: localPath,
+            remotePath: remotePath,
+            existingRules: existing
+        ) {
+            appState.alertItem = AlertItem(title: "无法创建同步规则", message: error.message)
+            return false
+        }
+
+        let matcher = ExclusionMatcher(
+            patterns: excludePatterns + SyncWatcher.mandatorySecretExcludes
+        )
+        let localNames: Set<String>
+        do {
+            let children = try FileManager.default.contentsOfDirectory(atPath: localPath)
+            localNames = Set(children.filter {
+                !matcher.shouldExclude(localPath + "/" + $0)
+            })
+        } catch {
+            appState.alertItem = AlertItem(
+                title: "无法创建同步规则",
+                message: "无法读取本地文件夹「\(localPath)」的内容，请重新选择。"
+            )
+            return false
+        }
+
+        let remoteNames: Set<String>
+        do {
+            remoteNames = try await appState.remoteDirectoryNames(
+                server: server, path: remotePath
+            )
+        } catch {
+            appState.showError(error)
+            return false
+        }
+
+        let collisions = localNames.intersection(remoteNames).sorted()
+        if !collisions.isEmpty {
+            let shown = collisions.prefix(8).joined(separator: "、")
+            let more = collisions.count > 8 ? " 等 \(collisions.count) 个" : ""
+            appState.alertItem = AlertItem(
+                title: "远程目录已存在同名文件",
+                message: "远程路径「\(remotePath)」中已存在与本地同名的文件/文件夹：\(shown)\(more)。为防止覆盖他人数据，已停止创建。请改用一个空的或专用的远程目录。"
+            )
+            return false
+        }
+
+        addWatcher(
+            localPath: localPath,
+            localPathBookmark: localPathBookmark,
+            remotePath: remotePath,
+            excludePatterns: excludePatterns
+        )
+        return true
+    }
+
     // MARK: - Toggle active
     func toggle(_ watcher: SyncWatcher) {
         guard let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
@@ -208,6 +295,24 @@ final class RealtimeSyncViewModel: ObservableObject {
                     let remotePath = watcher.remotePath.hasSuffix("/")
                         ? watcher.remotePath + relative.trimmingCharacters(in: .init(charactersIn: "/"))
                         : watcher.remotePath + relative
+
+                    // Conflict-safe overwrite: if the remote copy is newer
+                    // than this local file, skip the upload and surface a
+                    // conflict instead of clobbering newer remote work.
+                    // Best-effort: unknown remote mtime → proceed as before.
+                    let localMod = try? URL(fileURLWithPath: event.path)
+                        .resourceValues(forKeys: [.contentModificationDateKey])
+                        .contentModificationDate
+                    let remoteMod = await self.appState.remoteFileModifiedDate(
+                        server: self.server, remotePath: remotePath
+                    )
+                    if SyncConflictDecision.shouldSkipUpload(
+                        localModified: localMod, remoteModified: remoteMod
+                    ) {
+                        self.conflicts.insert((fileName, Date()), at: 0)
+                        if self.conflicts.count > 20 { self.conflicts.removeLast() }
+                        return
+                    }
 
                     await self.appState.enqueue(
                         server: self.server, direction: .upload,
@@ -274,6 +379,8 @@ struct RealtimeSyncView: View {
     @State private var localPathBookmark: Data?
     @State private var remotePath = ""
     @State private var excludeText = SyncWatcher.defaultExcludePatterns.joined(separator: "\n")
+    @State private var acknowledged = false
+    @State private var showConfirm = false
 
     var body: some View {
         if !vm.hasFullAccess {
@@ -374,6 +481,32 @@ struct RealtimeSyncView: View {
                 .padding(.vertical, 6)
                 .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
             }
+            // ── Conflicts (skipped: remote newer) ──
+            if !vm.conflicts.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("已跳过（远程更新，未覆盖）")
+                        .font(.caption).foregroundColor(.orange).padding(.horizontal, 12)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(vm.conflicts.prefix(6), id: \.1) { name, date in
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange).font(.caption2)
+                                    Text(name).font(.caption).lineLimit(1)
+                                    Spacer()
+                                    Text(date.formatted(date: .omitted, time: .shortened))
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                .padding(.horizontal, 12)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 90)
+                }
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.06))
+            }
         }
         .sheet(isPresented: $vm.showAddSheet) { addSheet }
     }
@@ -454,30 +587,67 @@ struct RealtimeSyncView: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
             }
 
+            // Honest behavior + risk disclosure
+            VStack(alignment: .leading, spacing: 5) {
+                Label("本规则仅上传：本地文件保存后会上传到远程。", systemImage: "arrow.up.circle")
+                Label("不会删除远程文件；空文件夹与文件夹改名不会被同步。", systemImage: "trash.slash")
+                Label("远程已存在的同名文件可能被覆盖（远程更新的文件会自动跳过并提示）。", systemImage: "exclamationmark.triangle")
+            }
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
+
+            Toggle(isOn: $acknowledged) {
+                Text("我已了解：远程同名文件可能被覆盖，且本规则不会删除远程文件。")
+                    .font(.caption)
+            }
+            .toggleStyle(.checkbox)
+
             Spacer()
 
             HStack {
                 Button("取消") { vm.showAddSheet = false }
                 Spacer()
-                Button("添加") {
-                    let patterns = excludeText.split(separator: "\n")
-                        .map { $0.trimmingCharacters(in: .whitespaces) }
-                        .filter { !$0.isEmpty }
-                    guard let localPathBookmark else { return }
-                    vm.addWatcher(
-                        localPath: localPath,
-                        localPathBookmark: localPathBookmark,
-                        remotePath: remotePath,
-                        excludePatterns: patterns
-                    )
-                    vm.showAddSheet = false
+                if vm.isValidating {
+                    ProgressView().controlSize(.small).padding(.trailing, 6)
                 }
+                Button("添加") { showConfirm = true }
                 .buttonStyle(.borderedProminent)
-                .disabled(localPath.isEmpty || localPathBookmark == nil || remotePath.isEmpty)
+                .disabled(
+                    localPath.isEmpty || localPathBookmark == nil ||
+                    remotePath.isEmpty || !acknowledged || vm.isValidating
+                )
             }
         }
         .padding(24)
-        .frame(width: 500, height: 420)
+        .frame(width: 520, height: 560)
+        .alert("再次确认同步规则", isPresented: $showConfirm) {
+            Button("取消", role: .cancel) {}
+            Button("确认创建") {
+                let patterns = excludeText.split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                guard let bookmark = localPathBookmark else { return }
+                Task {
+                    let ok = await vm.validateAndAddWatcher(
+                        localPath: localPath,
+                        localPathBookmark: bookmark,
+                        remotePath: remotePath,
+                        excludePatterns: patterns
+                    )
+                    if ok {
+                        vm.showAddSheet = false
+                        localPath = ""; localPathBookmark = nil
+                        remotePath = ""; acknowledged = false
+                        excludeText = SyncWatcher.defaultExcludePatterns.joined(separator: "\n")
+                    }
+                }
+            }
+        } message: {
+            Text("将监控本地：\(localPath)\n上传到远程：\(remotePath)\n\n远程同名文件可能被覆盖；确认这两个路径无误？")
+        }
     }
 }
 

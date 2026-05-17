@@ -312,7 +312,21 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
 
     public static let defaultExcludePatterns = [
         "node_modules", ".git", ".DS_Store", "*.log",
-        ".env", "dist", "build", ".next", "__pycache__",
-        "*.swp", "Thumbs.db", ".idea", ".vscode"
+        ".env", ".env.*", "dist", "build", ".next", "__pycache__",
+        ".venv", "venv", "*.swp", "*.tmp", "Thumbs.db", ".idea", ".vscode",
+        "DerivedData", "*.xcuserstate", ".__swiftftp_tmp__",
+        ".ssh", ".gnupg", ".aws", ".kube", "*.pem", "*.key",
+        "id_rsa", "id_ed25519", ".netrc", ".npmrc", ".pypirc"
+    ]
+
+    /// Always applied on top of the user's patterns, even if the user clears
+    /// the exclude box. This is the last line of defence against
+    /// accidentally syncing private keys / credentials to a remote server.
+    /// Not user-removable by design.
+    public static let mandatorySecretExcludes = [
+        ".ssh", ".gnupg", ".aws", ".kube",
+        "*.pem", "*.key", "id_rsa", "id_ed25519",
+        ".env", ".env.*", ".netrc", ".npmrc", ".pypirc",
+        "*.keychain", "*.keychain-db", "Keychains"
     ]
 }
