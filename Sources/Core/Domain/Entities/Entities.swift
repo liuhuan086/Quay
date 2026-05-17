@@ -326,6 +326,32 @@ public enum SyncInitialSyncPolicy: String, Codable, CaseIterable, Identifiable, 
     }
 }
 
+public enum SyncWatcherRuntimeState: String, Codable, CaseIterable, Identifiable, Sendable {
+    case running
+    case paused
+    case checkingDrift
+    case driftDetected
+    case permissionLost
+    case error
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .running: return "监控中"
+        case .paused: return "已暂停"
+        case .checkingDrift: return "检查远端"
+        case .driftDetected: return "发现漂移"
+        case .permissionLost: return "权限失效"
+        case .error: return "需要处理"
+        }
+    }
+
+    public static func defaultState(isActive: Bool) -> SyncWatcherRuntimeState {
+        isActive ? .running : .paused
+    }
+}
+
 public struct SyncWatcher: Identifiable, Codable, Sendable {
     public let id: UUID
     public let serverID: UUID
@@ -338,6 +364,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
     public var initialSyncPolicy: SyncInitialSyncPolicy
     public var mirrorDeleteEnabled: Bool
     public var isActive: Bool
+    public var runtimeState: SyncWatcherRuntimeState
     public var lastSyncAt: Date?
     public var lastDriftCheckAt: Date?
     public var totalSynced: Int
@@ -375,6 +402,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         initialSyncPolicy: SyncInitialSyncPolicy = .futureOnly,
         mirrorDeleteEnabled: Bool = false,
         isActive: Bool,
+        runtimeState: SyncWatcherRuntimeState? = nil,
         lastSyncAt: Date?,
         lastDriftCheckAt: Date? = nil,
         totalSynced: Int
@@ -390,6 +418,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         self.initialSyncPolicy = initialSyncPolicy
         self.mirrorDeleteEnabled = mirrorDeleteEnabled
         self.isActive = isActive
+        self.runtimeState = runtimeState ?? SyncWatcherRuntimeState.defaultState(isActive: isActive)
         self.lastSyncAt = lastSyncAt
         self.lastDriftCheckAt = lastDriftCheckAt
         self.totalSynced = totalSynced
@@ -407,6 +436,7 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         case initialSyncPolicy
         case mirrorDeleteEnabled
         case isActive
+        case runtimeState
         case lastSyncAt
         case lastDriftCheckAt
         case totalSynced
@@ -428,6 +458,10 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         ) ?? .futureOnly
         self.mirrorDeleteEnabled = try c.decodeIfPresent(Bool.self, forKey: .mirrorDeleteEnabled) ?? false
         self.isActive = try c.decode(Bool.self, forKey: .isActive)
+        self.runtimeState = try c.decodeIfPresent(
+            SyncWatcherRuntimeState.self,
+            forKey: .runtimeState
+        ) ?? SyncWatcherRuntimeState.defaultState(isActive: isActive)
         self.lastSyncAt = try c.decodeIfPresent(Date.self, forKey: .lastSyncAt)
         self.lastDriftCheckAt = try c.decodeIfPresent(Date.self, forKey: .lastDriftCheckAt)
         self.totalSynced = try c.decode(Int.self, forKey: .totalSynced)

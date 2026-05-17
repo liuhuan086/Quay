@@ -876,6 +876,7 @@ final class SyncWatcherCodingTests: XCTestCase {
         XCTAssertEqual(watchers.first?.mode, .realtimeUpload)
         XCTAssertEqual(watchers.first?.initialSyncPolicy, .futureOnly)
         XCTAssertEqual(watchers.first?.mirrorDeleteEnabled, false)
+        XCTAssertEqual(watchers.first?.runtimeState, .running)
         XCTAssertNil(watchers.first?.lastDriftCheckAt)
     }
 
@@ -893,6 +894,7 @@ final class SyncWatcherCodingTests: XCTestCase {
             initialSyncPolicy: .uploadMissingAndNewer,
             mirrorDeleteEnabled: true,
             isActive: true,
+            runtimeState: .driftDetected,
             lastSyncAt: nil,
             lastDriftCheckAt: lastDriftCheck,
             totalSynced: 0
@@ -903,7 +905,45 @@ final class SyncWatcherCodingTests: XCTestCase {
         XCTAssertEqual(decoded.first?.mode, .oneWayMirror)
         XCTAssertEqual(decoded.first?.initialSyncPolicy, .uploadMissingAndNewer)
         XCTAssertEqual(decoded.first?.mirrorDeleteEnabled, true)
+        XCTAssertEqual(decoded.first?.runtimeState, .driftDetected)
         XCTAssertEqual(decoded.first?.lastDriftCheckAt, lastDriftCheck)
+    }
+
+    func test_legacyInactiveWatcherDecodesAsPaused() throws {
+        let id = UUID()
+        let serverID = UUID()
+        let json = """
+        [{
+          "id": "\(id.uuidString)",
+          "serverID": "\(serverID.uuidString)",
+          "serverName": "Mac",
+          "localPath": "/Users/alice/project",
+          "remotePath": "/home/alice/project",
+          "excludePatterns": [],
+          "isActive": false,
+          "totalSynced": 0
+        }]
+        """.data(using: .utf8)!
+
+        let watchers = try JSONDecoder().decode([SyncWatcher].self, from: json)
+        XCTAssertEqual(watchers.first?.runtimeState, .paused)
+    }
+}
+
+final class SyncWatcherRuntimeStateTests: XCTestCase {
+
+    func test_defaultStateFollowsActiveFlag() {
+        XCTAssertEqual(SyncWatcherRuntimeState.defaultState(isActive: true), .running)
+        XCTAssertEqual(SyncWatcherRuntimeState.defaultState(isActive: false), .paused)
+    }
+
+    func test_displayNamesAreUserVisible() {
+        XCTAssertEqual(SyncWatcherRuntimeState.running.displayName, "监控中")
+        XCTAssertEqual(SyncWatcherRuntimeState.paused.displayName, "已暂停")
+        XCTAssertEqual(SyncWatcherRuntimeState.checkingDrift.displayName, "检查远端")
+        XCTAssertEqual(SyncWatcherRuntimeState.driftDetected.displayName, "发现漂移")
+        XCTAssertEqual(SyncWatcherRuntimeState.permissionLost.displayName, "权限失效")
+        XCTAssertEqual(SyncWatcherRuntimeState.error.displayName, "需要处理")
     }
 }
 

@@ -19,7 +19,9 @@ Most of this document is the **target** model. Track what is actually shipped he
 
 **Remote drift detection shipped through Steps 7 and 9:** each sync rule can compare local and remote snapshots on demand, preview remote missing / extra / newer / older / type / case-folding / timestamp-uncertain drift, and offer repair-remote, ignore-once, or pause-rule actions. Active rules also run a lightweight scheduled drift audit because FTP/SFTP servers do not push remote file-system events. Repair writes only to the remote side; it never pulls B-side changes back into A.
 
-**Not yet implemented (still target-only):** richer diff browsing, full rule state machine, and stale-trash cleanup. The Acceptance Criteria section is the gate for those future phases.
+**Rule state model shipped through Step 10:** sync rows now persist and display explicit runtime state: monitoring, paused, checking remote, drift detected, permission lost, or needs attention. This keeps local watcher activity, remote drift, sandbox permission loss, and safety pauses visible instead of hiding them behind alerts.
+
+**Not yet implemented (still target-only):** richer diff browsing and stale-trash cleanup. The Acceptance Criteria section is the gate for those future phases.
 
 **Additional shipped guardrail:** upload tasks now write to `<filename>.__swiftftp_tmp__` and rename into place on success. SwiftFTP temp files are ignored by watchers, local/remote snapshots, and default excludes. Stale-temp cleanup is intentionally not enabled until managed-root scoping exists.
 

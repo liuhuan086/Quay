@@ -495,6 +495,7 @@ final class AppState: ObservableObject {
     private func pauseMirrorWatcher(_ watcher: SyncWatcher, reason: Error) {
         var paused = watcher
         paused.isActive = false
+        paused.runtimeState = .error
         upsertSyncWatcher(paused)
         let friendly = (reason as? LocalizedError)?.errorDescription
             ?? FTPError.friendly(reason).errorDescription

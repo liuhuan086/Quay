@@ -211,3 +211,27 @@ Acceptance:
 - A rule with no previous check is due for its first audit.
 - A recently checked rule is skipped until the minimum interval expires.
 - Unit tests cover the scheduling policy and watcher persistence compatibility.
+
+## Step 10: Rule Runtime State
+
+Status:
+
+- Sync rules now persist an explicit runtime state in addition to the legacy `isActive` watcher switch.
+- Existing persisted rules decode to `running` or `paused` based on `isActive`.
+- Rows show monitoring, paused, checking remote, drift detected, permission lost, or needs-attention state.
+- Manual and scheduled drift checks move rules through checking / drift / healthy states without auto-repairing.
+
+Scope:
+
+- Keep `isActive` as the watcher start/stop source of truth.
+- Add a user-visible state layer for UI and future recovery flows.
+- Mark sandbox bookmark failures as permission-lost and stop the rule.
+- Mark remote-newer conflicts and drift reports as drift-detected.
+- Mark managed mirror failures as needs-attention.
+
+Acceptance:
+
+- Legacy rules keep safe defaults after decoding.
+- Toggling a rule still starts/stops the underlying watcher.
+- State changes are visible in each sync row.
+- Unit tests cover state defaults, display names, and persistence compatibility.

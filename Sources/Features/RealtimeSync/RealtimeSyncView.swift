@@ -729,7 +729,9 @@ final class RealtimeSyncViewModel: ObservableObject {
     // MARK: - Toggle active
     func toggle(_ watcher: SyncWatcher) {
         guard let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
-        watchers[idx].isActive.toggle()
+        let isActive = !watchers[idx].isActive
+        watchers[idx].isActive = isActive
+        watchers[idx].runtimeState = SyncWatcherRuntimeState.defaultState(isActive: isActive)
         appState.upsertSyncWatcher(watchers[idx])
         refreshWatcher()
     }
@@ -737,6 +739,7 @@ final class RealtimeSyncViewModel: ObservableObject {
     private func activateWatcher(_ watcher: SyncWatcher) {
         guard let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
         watchers[idx].isActive = true
+        watchers[idx].runtimeState = .running
         appState.upsertSyncWatcher(watchers[idx])
         refreshWatcher()
     }
@@ -744,6 +747,7 @@ final class RealtimeSyncViewModel: ObservableObject {
     private func pauseWatcher(_ watcher: SyncWatcher, title: String, message: String) {
         guard let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
         watchers[idx].isActive = false
+        watchers[idx].runtimeState = .paused
         appState.upsertSyncWatcher(watchers[idx])
         appState.alertItem = AlertItem(title: title, message: message)
         refreshWatcher()
@@ -776,6 +780,7 @@ final class RealtimeSyncViewModel: ObservableObject {
         presentation: DriftDetectionPresentation
     ) async {
         guard let bookmark = watcher.localPathBookmark else {
+            markWatcherState(watcherID: watcher.id, state: .permissionLost, isActive: false)
             if presentation.showsErrors {
                 appState.alertItem = AlertItem(
                     title: "无法检测远端漂移",
@@ -795,6 +800,7 @@ final class RealtimeSyncViewModel: ObservableObject {
                 bookmarkDataIsStale: &isStale
             )
             guard !isStale else {
+                markWatcherState(watcherID: watcher.id, state: .permissionLost, isActive: false)
                 if presentation.showsErrors {
                     appState.alertItem = AlertItem(
                         title: "无法检测远端漂移",
@@ -804,6 +810,7 @@ final class RealtimeSyncViewModel: ObservableObject {
                 return
             }
         } catch {
+            markWatcherState(watcherID: watcher.id, state: .error)
             if presentation.showsErrors {
                 appState.showError(error)
             }
@@ -811,6 +818,7 @@ final class RealtimeSyncViewModel: ObservableObject {
         }
 
         guard url.startAccessingSecurityScopedResource() else {
+            markWatcherState(watcherID: watcher.id, state: .permissionLost, isActive: false)
             if presentation.showsErrors {
                 appState.alertItem = AlertItem(
                     title: "无法检测远端漂移",
@@ -839,16 +847,27 @@ final class RealtimeSyncViewModel: ObservableObject {
             if report.hasDrift {
                 driftWarnings.insert((watcher.remotePath, Date()), at: 0)
                 if driftWarnings.count > 20 { driftWarnings.removeLast() }
+                markWatcherState(watcherID: watcher.id, state: .driftDetected)
                 if pendingDriftReport == nil {
                     pendingDriftReport = PresentedRemoteDriftReport(watcher: watcher, report: report)
                 }
             } else if presentation.showsNoDriftAlert {
+                markWatcherState(
+                    watcherID: watcher.id,
+                    state: SyncWatcherRuntimeState.defaultState(isActive: watcher.isActive)
+                )
                 appState.alertItem = AlertItem(
                     title: "未发现远端漂移",
                     message: "远程目录与本地源目录一致，未发现远程缺失、额外、更新或类型冲突。"
                 )
+            } else {
+                markWatcherState(
+                    watcherID: watcher.id,
+                    state: SyncWatcherRuntimeState.defaultState(isActive: watcher.isActive)
+                )
             }
         } catch {
+            markWatcherState(watcherID: watcher.id, state: .error)
             if presentation.showsErrors {
                 appState.showError(error)
             }
@@ -888,7 +907,26 @@ final class RealtimeSyncViewModel: ObservableObject {
     private func markDriftCheckStarted(watcherID: UUID, at date: Date) -> SyncWatcher? {
         guard let idx = watchers.firstIndex(where: { $0.id == watcherID }) else { return nil }
         watchers[idx].lastDriftCheckAt = date
+        watchers[idx].runtimeState = .checkingDrift
         appState.upsertSyncWatcher(watchers[idx])
+        return watchers[idx]
+    }
+
+    @discardableResult
+    private func markWatcherState(
+        watcherID: UUID,
+        state: SyncWatcherRuntimeState,
+        isActive: Bool? = nil
+    ) -> SyncWatcher? {
+        guard let idx = watchers.firstIndex(where: { $0.id == watcherID }) else { return nil }
+        if let isActive {
+            watchers[idx].isActive = isActive
+        }
+        watchers[idx].runtimeState = state
+        appState.upsertSyncWatcher(watchers[idx])
+        if isActive == false {
+            refreshWatcher()
+        }
         return watchers[idx]
     }
 
@@ -1028,6 +1066,7 @@ final class RealtimeSyncViewModel: ObservableObject {
                     ) {
                         self.conflicts.insert((fileName, Date()), at: 0)
                         if self.conflicts.count > 20 { self.conflicts.removeLast() }
+                        self.markWatcherState(watcherID: watcher.id, state: .driftDetected)
                         return
                     }
 
@@ -1044,6 +1083,7 @@ final class RealtimeSyncViewModel: ObservableObject {
                     if let i = self.watchers.firstIndex(where: { $0.id == watcher.id }) {
                         self.watchers[i].lastSyncAt = Date()
                         self.watchers[i].totalSynced += 1
+                        self.watchers[i].runtimeState = .running
                         self.appState.upsertSyncWatcher(self.watchers[i])
                     }
                     self.appState.notifications.sendSyncEvent(fileName: fileName, remotePath: remotePath)
@@ -1051,6 +1091,11 @@ final class RealtimeSyncViewModel: ObservableObject {
             }
             await syncManager.setBookmarkStaleCallback { [weak self] watcher in
                 Task { @MainActor [weak self] in
+                    self?.markWatcherState(
+                        watcherID: watcher.id,
+                        state: .permissionLost,
+                        isActive: false
+                    )
                     self?.appState.alertItem = AlertItem(
                         title: "同步目录需要重新选择",
                         message: "\(watcher.localPath) 的访问权限已失效，请重新添加同步规则。"
@@ -1135,6 +1180,7 @@ final class RealtimeSyncViewModel: ObservableObject {
         if let i = watchers.firstIndex(where: { $0.id == watcher.id }) {
             watchers[i].lastSyncAt = Date()
             watchers[i].totalSynced += 1
+            watchers[i].runtimeState = .running
             appState.upsertSyncWatcher(watchers[i])
         }
         appState.notifications.sendSyncEvent(fileName: fileName, remotePath: quarantinedPath)
@@ -1832,12 +1878,14 @@ struct WatcherRow: View {
 
             Spacer()
 
-            if watcher.isActive {
-                HStack(spacing: 3) {
-                    Circle().fill(Color.green).frame(width: 6, height: 6)
-                    Text("监控中").font(.caption2).foregroundColor(.green)
-                }
+            HStack(spacing: 4) {
+                Image(systemName: stateIcon)
+                    .font(.caption2)
+                Text(watcher.runtimeState.displayName)
+                    .font(.caption2)
             }
+            .foregroundColor(stateColor)
+            .help(watcher.runtimeState.displayName)
 
             Button(action: onCheckDrift) {
                 Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
@@ -1864,5 +1912,26 @@ struct WatcherRow: View {
             parts.append("远端检查：\(lastDriftCheck.formatted(date: .omitted, time: .shortened))")
         }
         return parts.isEmpty ? nil : parts.joined(separator: "  ·  ")
+    }
+
+    private var stateIcon: String {
+        switch watcher.runtimeState {
+        case .running: return "circle.fill"
+        case .paused: return "pause.circle"
+        case .checkingDrift: return "magnifyingglass.circle"
+        case .driftDetected: return "exclamationmark.arrow.triangle.2.circlepath"
+        case .permissionLost: return "lock.slash"
+        case .error: return "exclamationmark.octagon"
+        }
+    }
+
+    private var stateColor: Color {
+        switch watcher.runtimeState {
+        case .running: return .green
+        case .paused: return .secondary
+        case .checkingDrift: return .accentColor
+        case .driftDetected: return .orange
+        case .permissionLost, .error: return .red
+        }
     }
 }
