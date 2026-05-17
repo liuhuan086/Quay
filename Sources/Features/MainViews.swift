@@ -349,7 +349,7 @@ struct ServerRow: View {
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(server.displayName)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 11, weight: .regular))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(server.host)

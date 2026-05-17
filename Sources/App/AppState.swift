@@ -224,8 +224,8 @@ final class AppState: ObservableObject {
             let client = try await pool.borrowClient(password: server.password)
             connectionStates[server.id] = .connected(client: client)
             selectedServerID = server.id
-            var updated = server; updated.lastConnectedAt = Date()
-            updateServer(updated)
+            repository.updateLastConnected(for: server.id, at: Date())
+            loadServers()
         } catch {
             connectionStates[server.id] = .failed(error)
             showError(error)

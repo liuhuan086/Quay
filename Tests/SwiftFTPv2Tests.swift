@@ -211,6 +211,21 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertEqual(repo.fetchAll().first(where: { $0.id == c.id })?.displayName, "Updated")
     }
 
+    func test_updateLastConnectedPreservesDisplayName() {
+        var c = makeCfg("192.168.2.4")
+        repo.save(c)
+
+        c.displayName = "Mac"
+        repo.update(c)
+
+        let connectedAt = Date(timeIntervalSince1970: 1_770_000_000)
+        repo.updateLastConnected(for: c.id, at: connectedAt)
+
+        let fetched = repo.fetchAll().first(where: { $0.id == c.id })
+        XCTAssertEqual(fetched?.displayName, "Mac")
+        XCTAssertEqual(fetched?.lastConnectedAt, connectedAt)
+    }
+
     func test_delete() {
         let c = makeCfg("Delete Test")
         repo.save(c)
