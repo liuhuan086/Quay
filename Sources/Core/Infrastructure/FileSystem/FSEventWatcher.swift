@@ -38,11 +38,12 @@ public final class FSEventWatcher: @unchecked Sendable {
     }
 
     // MARK: - Start
-    public func startWatching(paths: [String]) {
+    @discardableResult
+    public func startWatching(paths: [String]) -> Bool {
         // FIXME(AppSandbox): each watched path must come from a security-scoped
         // bookmark before this is used in the Mac App Store sandbox.
         stopWatching()
-        guard !paths.isEmpty else { return }
+        guard !paths.isEmpty else { return false }
 
         // We pass `self` as UnsafeMutableRawPointer; the callback is a C function,
         // so we use `@unchecked Sendable` + manual retain/release to bridge safely.
@@ -74,17 +75,24 @@ public final class FSEventWatcher: @unchecked Sendable {
             }
         }
 
-        streamRef = FSEventStreamCreate(
+        guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault, callback, &ctx,
             paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.2, flags
-        )
-
-        if let stream = streamRef {
-            FSEventStreamSetDispatchQueue(stream, debounceQueue)
-            FSEventStreamStart(stream)
+        ) else {
+            return false
         }
+
+        streamRef = stream
+        FSEventStreamSetDispatchQueue(stream, debounceQueue)
+        guard FSEventStreamStart(stream) else {
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            streamRef = nil
+            return false
+        }
+        return true
     }
 
     // MARK: - Stop

@@ -21,6 +21,7 @@ struct FileBrowserView: View {
 
     @StateObject private var localVM  = LocalFileVM()
     @StateObject private var remoteVM: RemoteFileVM
+    @StateObject private var syncVM: RealtimeSyncViewModel
 
     @State private var showNewFolderRemote = false
     @State private var showRenameLocal: LocalFileItem?
@@ -45,6 +46,7 @@ struct FileBrowserView: View {
         self.primaryClient = primaryClient
         _remoteVM = StateObject(wrappedValue: RemoteFileVM(client: primaryClient,
                                                             initialPath: server.initialPath))
+        _syncVM = StateObject(wrappedValue: RealtimeSyncViewModel(appState: appState, server: server))
     }
 
     var body: some View {
@@ -77,7 +79,7 @@ struct FileBrowserView: View {
             }
         }
         .sheet(isPresented: $showSyncView) {
-            RealtimeSyncView(vm: RealtimeSyncViewModel(appState: appState, server: server))
+            RealtimeSyncView(vm: syncVM)
                 .frame(width: 560, height: 500)
         }
         .background(

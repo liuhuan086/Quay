@@ -109,6 +109,7 @@ actor TransferEngine {
 
             do {
                 if task.direction == .upload {
+                    await ensureRemoteParentDirectories(for: task.remotePath, using: client)
                     try await client.upload(
                         localURL: task.localURL,
                         remotePath: task.remotePath,
@@ -180,6 +181,35 @@ actor TransferEngine {
             return false
         default:
             return true
+        }
+    }
+
+    private func ensureRemoteParentDirectories(for remotePath: String, using client: any AnyFTPClient) async {
+        for directory in Self.remoteParentDirectories(for: remotePath) {
+            do {
+                try await client.createDirectory(directory)
+            } catch {
+                // Existing parents usually report as failures over FTP/SFTP. The upload itself
+                // will still surface real permission or missing-path errors to the user.
+            }
+        }
+    }
+
+    static func remoteParentDirectories(for remotePath: String) -> [String] {
+        let normalized = remotePath
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard normalized.count > 1 else { return [] }
+
+        let isAbsolute = remotePath.hasPrefix("/")
+        var current = ""
+        return normalized.dropLast().map { component in
+            if current.isEmpty {
+                current = isAbsolute ? "/\(component)" : component
+            } else {
+                current += "/\(component)"
+            }
+            return current
         }
     }
 
