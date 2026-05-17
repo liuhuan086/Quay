@@ -7,6 +7,11 @@ private enum BrowserPane: Hashable {
     case remote
 }
 
+enum FilePanePresentation: Equatable {
+    case regular
+    case compact
+}
+
 // MARK: - FileBrowserView
 struct FileBrowserView: View {
     let appState: AppState
@@ -148,26 +153,27 @@ struct FileBrowserView: View {
 
             Group {
                 switch compactPane {
-                case .local: localPane(showTransferActions: true)
-                case .remote: remotePane(showTransferActions: true)
+                case .local: localPane(presentation: .compact)
+                case .remote: remotePane(presentation: .compact)
                 }
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private func localPane(showTransferActions: Bool = false) -> some View {
+    private func localPane(presentation: FilePanePresentation = .regular) -> some View {
         FilePane(
             title: "本地", icon: "desktopcomputer",
             path: localVM.currentPath, canGoUp: localVM.canGoUp,
             isLoading: false,
+            presentation: presentation,
             onUp: { localVM.navigateUp() },
             onNavigate: { localVM.navigate(to: $0) },
             onRefresh: { localVM.refresh() },
             onNewFolder: nil,
             onOpenExternal: { localVM.openInFinder() },
             toolbarActions: {
-                if showTransferActions {
+                if presentation == .compact {
                     compactPaneActions(for: .local)
                 }
             }
@@ -182,18 +188,19 @@ struct FileBrowserView: View {
         }
     }
 
-    private func remotePane(showTransferActions: Bool = false) -> some View {
+    private func remotePane(presentation: FilePanePresentation = .regular) -> some View {
         FilePane(
             title: server.displayName, icon: server.protocol_.sfSymbol,
             path: remoteVM.currentPath, canGoUp: remoteVM.canGoUp,
             isLoading: remoteVM.isLoading,
+            presentation: presentation,
             onUp: { Task { await remoteVM.goUp() } },
             onNavigate: { path in Task { await remoteVM.navigate(to: path) } },
             onRefresh: { Task { await remoteVM.refresh() } },
             onNewFolder: { showNewFolderRemote = true },
             onOpenExternal: nil,
             toolbarActions: {
-                if showTransferActions {
+                if presentation == .compact {
                     compactPaneActions(for: .remote)
                 }
             }
@@ -471,6 +478,7 @@ struct FilePane<Content: View, ToolbarActions: View>: View {
     let path: String
     let canGoUp: Bool
     let isLoading: Bool
+    let presentation: FilePanePresentation
     let onUp: () -> Void
     let onNavigate: (String) -> Void
     let onRefresh: () -> Void
@@ -484,6 +492,7 @@ struct FilePane<Content: View, ToolbarActions: View>: View {
          path: String,
          canGoUp: Bool,
          isLoading: Bool,
+         presentation: FilePanePresentation = .regular,
          onUp: @escaping () -> Void,
          onNavigate: @escaping (String) -> Void,
          onRefresh: @escaping () -> Void,
@@ -496,6 +505,7 @@ struct FilePane<Content: View, ToolbarActions: View>: View {
         self.path = path
         self.canGoUp = canGoUp
         self.isLoading = isLoading
+        self.presentation = presentation
         self.onUp = onUp
         self.onNavigate = onNavigate
         self.onRefresh = onRefresh
@@ -508,23 +518,30 @@ struct FilePane<Content: View, ToolbarActions: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             // Header
-            HStack(spacing: 6) {
-                Image(systemName: icon).foregroundColor(.secondary).font(.system(size: 12))
-                Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                Spacer()
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 16, height: 16)
+            if presentation == .regular {
+                HStack(spacing: 6) {
+                    Image(systemName: icon).foregroundColor(.secondary).font(.system(size: 12))
+                    Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Spacer()
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 16, height: 16)
+                    }
                 }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Color(NSColor.controlBackgroundColor))
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Color(NSColor.controlBackgroundColor))
 
             // Breadcrumb
             HStack(spacing: 8) {
                 BreadcrumbBar(path: path, canGoUp: canGoUp, onUp: onUp, onNavigate: onNavigate)
                     .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                if presentation == .compact && isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                }
                 toolbarActions()
             }
             .padding(.trailing, 10)
@@ -533,27 +550,32 @@ struct FilePane<Content: View, ToolbarActions: View>: View {
 
             Divider()
             content()
-            Divider()
 
-            // Footer toolbar
-            HStack(spacing: 8) {
-                Button { onRefresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).help("刷新 (⌘R)")
-                if let nf = onNewFolder {
-                    Button { nf() } label: { Image(systemName: "folder.badge.plus") }
-                        .buttonStyle(.plain).help("新建文件夹")
-                }
-                if let ext = onOpenExternal {
-                    Button { ext() } label: { Image(systemName: "arrow.up.right.square") }
-                        .buttonStyle(.plain).help("在 Finder 中打开")
-                }
-                Spacer()
-                Text(path).font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary).lineLimit(1).truncationMode(.head)
+            if presentation == .regular {
+                Divider()
+                footerToolbar
             }
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(Color(NSColor.controlBackgroundColor))
         }
+    }
+
+    private var footerToolbar: some View {
+        HStack(spacing: 8) {
+            Button { onRefresh() } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.plain).help("刷新 (⌘R)")
+            if let nf = onNewFolder {
+                Button { nf() } label: { Image(systemName: "folder.badge.plus") }
+                    .buttonStyle(.plain).help("新建文件夹")
+            }
+            if let ext = onOpenExternal {
+                Button { ext() } label: { Image(systemName: "arrow.up.right.square") }
+                    .buttonStyle(.plain).help("在 Finder 中打开")
+            }
+            Spacer()
+            Text(path).font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.secondary).lineLimit(1).truncationMode(.head)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Color(NSColor.controlBackgroundColor))
     }
 }
 
@@ -563,6 +585,7 @@ extension FilePane where ToolbarActions == EmptyView {
          path: String,
          canGoUp: Bool,
          isLoading: Bool,
+         presentation: FilePanePresentation = .regular,
          onUp: @escaping () -> Void,
          onNavigate: @escaping (String) -> Void,
          onRefresh: @escaping () -> Void,
@@ -574,6 +597,7 @@ extension FilePane where ToolbarActions == EmptyView {
                   path: path,
                   canGoUp: canGoUp,
                   isLoading: isLoading,
+                  presentation: presentation,
                   onUp: onUp,
                   onNavigate: onNavigate,
                   onRefresh: onRefresh,
