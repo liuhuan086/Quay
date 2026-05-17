@@ -26,12 +26,16 @@ The `ac8e0a6` guardrail pass is directionally good, but it is not the final sync
 - **Remote `.`/`..` canonicalization — Confirmed gap (remote only).** `remoteRootError` collapses `//` and maps `\`→`/`, but never resolves `.`/`..`. `/home/user/project/../../etc` has six components, matches no forbidden entry, and is accepted. (The local side already resolves `..` via `normalize()` / `standardizedFileURL`, so the gap is remote-side only.) Canonicalization must also run before any future remote write/delete, not just at rule creation.
 - **Remote macOS home broad-folders — Confirmed gap.** `forbiddenHomeChildren` is applied only in `localRootStaticError`; `remoteRootError` has no home-folder concept. `/Users/<user>/Downloads`, `/Documents`, `/Desktop` are accepted as remote roots. They must be rejected as roots while `/Users/<user>/Downloads/project-a` may be allowed.
 - **Remote Linux home + sensitive descendants — Partially handled.** `/etc/...` *is* already blocked (subtree entry in `forbiddenRemoteSubtrees`) — it should not be cited as a gap. Still open: `/home/<user>` is rejected only incidentally by the depth rule (reported as "too shallow", not as a home root), and `/root/...`, `/usr/...`, `/opt/...`, `/var/lib/...`, `/var/log/...` deeper than three components pass because those roots are `forbiddenRemoteExact` only, with no subtree entry. Add intent-based home-root rejection and subtree coverage for these sensitive trees.
+- **Local sensitive home descendants — Confirmed gap.** `forbiddenHomeChildren` currently rejects exact broad roots such as `/Users/<user>/Downloads`, but not sensitive descendants such as `/Users/<user>/Library/Application Support/...`, `/Users/<user>/.ssh/...`, `/Users/<user>/.aws/...`, or `/Users/<user>/.kube/...`. Project subfolders under `Documents` or `Downloads` may be allowed, but credential stores, app support data, and shell/security folders should be subtree-forbidden.
+- **Windows-style remote known folders — Confirmed gap.** The current remote validator blocks drive roots, `C:\Windows`, and `C:\Program Files`, but does not block `C:\Users\<user>`, `C:\Users\<user>\Downloads`, `C:\Users\<user>\Documents`, `C:\Users\<user>\Desktop`, or `C:\Users\<user>\AppData`. Treat Windows known folders like macOS/Linux home broad folders: broad roots are rejected, explicit project subdirectories may be allowed only when they are not under sensitive stores such as `AppData`.
+- **Remote overlap uses local path normalization — Confirmed gap.** `overlapError` calls `isSameOrNested`, which uses local `normalize()` for both local and remote paths. That can mis-handle Windows-style remote paths and remote POSIX paths containing `.`/`..`. Remote overlap checks need a remote-specific canonicalizer shared with remote validation.
 - **`/var/www/site`-style deploy targets — Design gate, not a bug.** Currently accepted with only the generic acknowledgement checkbox. Upload-only "advanced deploy" destinations are a deliberate product choice: they need an explicit advanced confirmation and must remain disallowed for destructive mirror mode unless the user has deliberately created a managed remote root.
 - **Missing remote target classification — Confirmed gap (FTP).** `AppState.remoteDirectoryNames` only maps `FTPError.fileNotFound` to "empty / no collision". FTP commonly surfaces a missing directory as a generic `550` / bad response, so on FTP `validateAndAddWatcher` would wrongly block creation of a valid brand-new dedicated target. Classify protocol-aware: missing directory with an accessible parent → allow; permission/connection failure → keep blocking.
 - **Remote mtime trust — Open (design-level).** `SyncConflictDecision.shouldSkipUpload` already fails open on unknown timestamps, but the *quality* of `RemoteFileItem.modifiedDate` is not graded by protocol. SFTP attrs are usually reliable; FTP `MLSD modify` should be parsed as UTC; FTP `LIST` time is not reliable enough to drive a skip. When timestamp quality is unknown, mark the comparison uncertain rather than silently skipping an upload.
 - **Burst-cap visibility — Confirmed gap.** `recentlyChangedFiles` breaks silently at 500 files with no rule state or UI signal. A truncated scan must show "scan truncated" and offer a rescan / manual initial sync instead of dropping the remaining files.
 - **Collision depth — Accurate; future requirement.** `validateAndAddWatcher` does a top-level, name-only, non-recursive check. That is acceptable as a conservative first pass, but the initial-sync / mirror planner must report exact relative-path collisions and type conflicts (file-vs-directory) recursively.
 - **App temp matching — Confirmed gap.** Only `hasPrefix(".__swiftftp_tmp__")` is checked (in `shouldSyncFile` and `recentlyChangedFiles`); the default-exclude literal `.__swiftftp_tmp__` is an exact-component match. The suffix form (e.g. `report.txt.__swiftftp_tmp__`) is not skipped. Cover both `.__swiftftp_tmp__*` and `*.__swiftftp_tmp__`, consistent with the Atomic Uploads plan below.
+- **Mandatory secret excludes are case-sensitive — Confirmed gap.** `ExclusionMatcher` currently compares patterns and components case-sensitively. On case-insensitive macOS volumes or mixed-platform syncs, `.SSH`, `.Env`, `ID_RSA`, or `.AWS` can bypass the mandatory layer. Secret excludes should compare using case-folded and Unicode-normalized names.
 
 ## Product Goal
 
@@ -485,11 +489,15 @@ Before shipping mirror mode:
 
 - Unit-test forbidden path validation on macOS and Linux-style paths.
 - Unit-test Windows-style forbidden path validation.
+- Unit-test remote path canonicalization for `.`, `..`, repeated slashes, POSIX paths, and Windows-style paths.
+- Unit-test local sensitive home descendants such as `~/Library/Application Support`, `~/.ssh`, `~/.aws`, and `~/.kube`.
+- Unit-test remote macOS, Linux, and Windows home/known-folder roots and allowed project subdirectories.
+- Unit-test remote overlap with a remote-specific canonicalizer, not local filesystem normalization.
 - Unit-test remote path containment before delete.
 - Unit-test managed-root marker validation before delete.
 - Unit-test initial sync planning for upload, overwrite, delete, and type conflict.
 - Unit-test initial sync conflict when remote file is newer than local.
-- Unit-test excludes before upload/delete.
+- Unit-test excludes before upload/delete, including case-folded secret paths such as `.SSH`, `.Env`, `ID_RSA`, and `.AWS`.
 - Unit-test symlink escape rejection.
 - Unit-test case-folding conflict detection.
 - Unit-test delete threshold blocking.
