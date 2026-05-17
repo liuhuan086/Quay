@@ -914,6 +914,30 @@ public enum RemoteDriftIssueKind: Sendable, Equatable {
     case invalidRelativePath
 }
 
+public enum RemoteDriftIssueGroup: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case localUploads
+    case remoteMissing
+    case remoteExtra
+    case remoteOutdated
+    case remoteNewer
+    case conflicts
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .all: return "全部"
+        case .localUploads: return "需上传"
+        case .remoteMissing: return "远程缺失"
+        case .remoteExtra: return "远程额外"
+        case .remoteOutdated: return "远程较旧"
+        case .remoteNewer: return "远程较新"
+        case .conflicts: return "冲突"
+        }
+    }
+}
+
 public struct RemoteDriftIssue: Sendable, Equatable {
     public var kind: RemoteDriftIssueKind
     public var relativePath: String
@@ -971,6 +995,29 @@ public struct RemoteDriftReport: Sendable, Equatable {
     }
     public var repairUploadFiles: [RemoteDriftIssue] {
         remoteMissingFiles + remoteOutdatedFiles
+    }
+
+    public func issues(in group: RemoteDriftIssueGroup) -> [RemoteDriftIssue] {
+        switch group {
+        case .all:
+            return issues
+        case .localUploads:
+            return remoteMissing + remoteOutdatedFiles
+        case .remoteMissing:
+            return remoteMissing
+        case .remoteExtra:
+            return remoteExtras
+        case .remoteOutdated:
+            return remoteOutdatedFiles
+        case .remoteNewer:
+            return remoteNewerFiles
+        case .conflicts:
+            return conflicts
+        }
+    }
+
+    public func count(in group: RemoteDriftIssueGroup) -> Int {
+        issues(in: group).count
     }
 }
 

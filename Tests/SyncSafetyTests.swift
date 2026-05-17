@@ -541,6 +541,26 @@ final class RemoteDriftDetectorTests: XCTestCase {
         XCTAssertEqual(report.conflicts.map(\.kind), [.timestampUncertain])
         XCTAssertTrue(report.repairUploadFiles.isEmpty)
     }
+
+    func test_issueGroupsFilterReportForDiffBrowser() {
+        let report = RemoteDriftReport(issues: [
+            RemoteDriftIssue(kind: .remoteMissingDirectory, relativePath: "Sources"),
+            RemoteDriftIssue(kind: .remoteMissingFile, relativePath: "Sources/App.swift"),
+            RemoteDriftIssue(kind: .remoteExtraFile, relativePath: "tmp.log"),
+            RemoteDriftIssue(kind: .remoteOutdatedFile, relativePath: "README.md"),
+            RemoteDriftIssue(kind: .remoteNewerFile, relativePath: "server.swift"),
+            RemoteDriftIssue(kind: .typeMismatch, relativePath: "config")
+        ])
+
+        XCTAssertEqual(report.count(in: .all), 6)
+        XCTAssertEqual(report.issues(in: .localUploads).map(\.relativePath), [
+            "Sources", "Sources/App.swift", "README.md"
+        ])
+        XCTAssertEqual(report.issues(in: .remoteExtra).map(\.relativePath), ["tmp.log"])
+        XCTAssertEqual(report.issues(in: .remoteNewer).map(\.relativePath), ["server.swift"])
+        XCTAssertEqual(report.issues(in: .conflicts).map(\.relativePath), ["config"])
+        XCTAssertEqual(RemoteDriftIssueGroup.localUploads.displayName, "需上传")
+    }
 }
 
 final class SyncRuleCreationPolicyTests: XCTestCase {

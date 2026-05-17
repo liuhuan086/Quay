@@ -235,3 +235,23 @@ Acceptance:
 - Toggling a rule still starts/stops the underlying watcher.
 - State changes are visible in each sync row.
 - Unit tests cover state defaults, display names, and persistence compatibility.
+
+## Step 11: Remote Drift Detail Browser
+
+Status:
+
+- Remote drift reports now show a categorized detail list instead of a plain text preview.
+- Users can filter by all items, local uploads needed, remote missing, remote extra, remote older, remote newer, or conflicts.
+- Each row shows drift type, relative path, and available local / remote metadata.
+
+Scope:
+
+- Keep repair actions explicit; browsing differences must not auto-repair.
+- Keep repair one-way and remote-only.
+- Make large reports inspectable without hiding items after the first preview lines.
+
+Acceptance:
+
+- The report sheet can inspect every issue in the drift report.
+- Filtering is backed by unit-tested report grouping.
+- Remote extra and remote newer items remain visible even when they are not automatically repairable.

@@ -1803,6 +1803,11 @@ private struct RemoteDriftReportSheet: View {
     let onRepair: () -> Void
     let onPause: () -> Void
     let onIgnore: () -> Void
+    @State private var selectedGroup: RemoteDriftIssueGroup = .all
+
+    private var filteredIssues: [RemoteDriftIssue] {
+        report.report.issues(in: selectedGroup)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1820,18 +1825,37 @@ private struct RemoteDriftReportSheet: View {
                 Spacer()
             }
 
-            ScrollView {
-                Text(report.message)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+            DriftSummaryGrid(report: report.report)
+
+            HStack {
+                Picker("筛选", selection: $selectedGroup) {
+                    ForEach(RemoteDriftIssueGroup.allCases) { group in
+                        Text("\(group.displayName) \(report.report.count(in: group))")
+                            .tag(group)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+
+                Spacer()
+
+                Text("\(filteredIssues.count) / \(report.report.issues.count) 项")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            .frame(minHeight: 220)
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(NSColor.controlBackgroundColor).opacity(0.65))
-            )
+
+            List {
+                ForEach(Array(filteredIssues.enumerated()), id: \.offset) { _, issue in
+                    RemoteDriftIssueRow(issue: issue)
+                }
+            }
+            .listStyle(.inset)
+            .frame(minHeight: 260)
+
+            Text(footerText)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack {
                 Button("忽略一次", action: onIgnore)
@@ -1846,7 +1870,140 @@ private struct RemoteDriftReportSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 540, height: 430)
+        .frame(width: 720, height: 560)
+    }
+
+    private var footerText: String {
+        if !report.report.remoteExtras.isEmpty &&
+            !(report.watcher.mode == .oneWayMirror && report.watcher.mirrorDeleteEnabled) {
+            return "修复只会写入远程，不会把远程变化同步回本地。远程额外项不会在实时上传规则中删除。"
+        }
+        return "修复只会写入远程，不会把远程变化同步回本地。"
+    }
+}
+
+private struct DriftSummaryGrid: View {
+    let report: RemoteDriftReport
+
+    var body: some View {
+        Grid(horizontalSpacing: 18, verticalSpacing: 6) {
+            GridRow {
+                summaryCell("缺失", report.remoteMissing.count, .orange)
+                summaryCell("额外", report.remoteExtras.count, .secondary)
+                summaryCell("较旧", report.remoteOutdatedFiles.count, .accentColor)
+                summaryCell("较新", report.remoteNewerFiles.count, .red)
+                summaryCell("冲突", report.conflicts.count, .red)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func summaryCell(_ title: String, _ count: Int, _ color: Color) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text("\(count)")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(count > 0 ? color : .secondary)
+                .monospacedDigit()
+        }
+    }
+}
+
+private struct RemoteDriftIssueRow: View {
+    let issue: RemoteDriftIssue
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: iconName)
+                .foregroundColor(tint)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(tint)
+                    Text(issue.relativePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+                if let detailText {
+                    Text(detailText)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var label: String {
+        switch issue.kind {
+        case .remoteMissingFile: return "远程缺失文件"
+        case .remoteMissingDirectory: return "远程缺失目录"
+        case .remoteExtraFile: return "远程额外文件"
+        case .remoteExtraDirectory: return "远程额外目录"
+        case .remoteOutdatedFile: return "远程较旧"
+        case .remoteNewerFile: return "远程较新"
+        case .typeMismatch: return "类型冲突"
+        case .caseFoldCollision: return "大小写冲突"
+        case .timestampUncertain: return "时间戳不确定"
+        case .invalidRelativePath: return "路径无效"
+        }
+    }
+
+    private var iconName: String {
+        switch issue.kind {
+        case .remoteMissingFile, .remoteMissingDirectory:
+            return "arrow.up.circle"
+        case .remoteExtraFile, .remoteExtraDirectory:
+            return "plus.circle"
+        case .remoteOutdatedFile:
+            return "arrow.clockwise.circle"
+        case .remoteNewerFile:
+            return "exclamationmark.triangle"
+        case .typeMismatch, .caseFoldCollision, .timestampUncertain, .invalidRelativePath:
+            return "xmark.octagon"
+        }
+    }
+
+    private var tint: Color {
+        switch issue.kind {
+        case .remoteMissingFile, .remoteMissingDirectory:
+            return .orange
+        case .remoteExtraFile, .remoteExtraDirectory:
+            return .secondary
+        case .remoteOutdatedFile:
+            return .accentColor
+        case .remoteNewerFile, .typeMismatch, .caseFoldCollision, .timestampUncertain, .invalidRelativePath:
+            return .red
+        }
+    }
+
+    private var detailText: String? {
+        let local = itemDescription(prefix: "本地", item: issue.local)
+        let remote = itemDescription(prefix: "远程", item: issue.remote)
+        let parts = [local, remote].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "  ·  ")
+    }
+
+    private func itemDescription(prefix: String, item: SyncSnapshotItem?) -> String? {
+        guard let item else { return nil }
+        if item.isDirectory { return "\(prefix)：文件夹" }
+        var parts = [
+            "\(prefix)：\(ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))"
+        ]
+        if let modifiedDate = item.modifiedDate {
+            parts.append(modifiedDate.formatted(date: .abbreviated, time: .shortened))
+        }
+        return parts.joined(separator: " ")
     }
 }
 

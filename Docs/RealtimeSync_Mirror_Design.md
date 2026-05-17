@@ -21,7 +21,9 @@ Most of this document is the **target** model. Track what is actually shipped he
 
 **Rule state model shipped through Step 10:** sync rows now persist and display explicit runtime state: monitoring, paused, checking remote, drift detected, permission lost, or needs attention. This keeps local watcher activity, remote drift, sandbox permission loss, and safety pauses visible instead of hiding them behind alerts.
 
-**Not yet implemented (still target-only):** richer diff browsing and stale-trash cleanup. The Acceptance Criteria section is the gate for those future phases.
+**Drift detail browsing shipped through Step 11:** remote drift reports now include a categorized detail list for all drift, local uploads needed, remote missing, remote extra, remote older, remote newer, and conflicts. The repair flow is still explicit and remote-only.
+
+**Not yet implemented (still target-only):** stale-trash cleanup. The Acceptance Criteria section is the gate for that future phase.
 
 **Additional shipped guardrail:** upload tasks now write to `<filename>.__swiftftp_tmp__` and rename into place on success. SwiftFTP temp files are ignored by watchers, local/remote snapshots, and default excludes. Stale-temp cleanup is intentionally not enabled until managed-root scoping exists.
 
