@@ -251,24 +251,23 @@ struct SidebarView: View {
 
             Divider()
 
-            List(selection: Binding(
-                get: { appState.selectedServerID },
-                set: { newID in
-                    DispatchQueue.main.async {
-                        appState.selectedServerID = newID
-                    }
-                }
-            )) {
+            List {
                 ForEach(grouped, id: \.0) { group, servers in
                     Section {
                         ForEach(servers) { s in
-                            ServerRow(server: s, state: appState.connectionStates[s.id])
+                            ServerRow(server: s,
+                                      state: appState.connectionStates[s.id],
+                                      isSelected: appState.selectedServerID == s.id)
                                 .contentShape(Rectangle())
+                                .onTapGesture {
+                                    appState.selectedServerID = s.id
+                                }
                                 .simultaneousGesture(TapGesture(count: 2).onEnded {
                                     connectOrDisconnect(s)
                                 })
                                 .tag(s.id)
-                                .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                                .listRowInsets(EdgeInsets(top: 1, leading: 6, bottom: 1, trailing: 6))
+                                .listRowBackground(Color.clear)
                                 .contextMenu { rowMenu(for: s) }
                         }
                     } header: {
@@ -344,17 +343,27 @@ private struct InitialFirstResponderClearer: NSViewRepresentable {
 struct ServerRow: View {
     let server: ServerConfig
     let state: ConnectionState?
+    let isSelected: Bool
+
+    private var connected: Bool {
+        if case .connected = state { return true }
+        return false
+    }
+
+    private var titleColor: Color { connected ? .white : .primary }
+    private var subtitleColor: Color { connected ? .white.opacity(0.8) : .secondary }
 
     var body: some View {
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(server.displayName)
                     .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(titleColor)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(server.host)
                     .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(subtitleColor)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -364,9 +373,23 @@ struct ServerRow: View {
             stateIndicator
                 .frame(width: 18, alignment: .trailing)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(rowBackground)
         .help(server.connectionSummary)
+    }
+
+    @ViewBuilder private var rowBackground: some View {
+        if connected {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.accentColor)
+        } else if isSelected {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
+        } else {
+            Color.clear
+        }
     }
 
     @ViewBuilder var stateIndicator: some View {
