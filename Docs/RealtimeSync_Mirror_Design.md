@@ -19,6 +19,20 @@ Most of this document is the **target** model. Track what is actually shipped he
 
 **Not yet implemented (still target-only):** one-way mirror mode, opt-in remote deletion, initial mirror sync planner, `.swiftftp-trash` quarantine, managed-root marker (`.swiftftp-mirror.json`), canary check, delete thresholds, B-side drift detection ("B missing → ask A"), rule state machine, atomic temp-rename uploads. The Acceptance Criteria section is the gate for that future phase.
 
+## Review Findings From Latest Sync Guardrail Pass
+
+The `ac8e0a6` guardrail pass is directionally good, but it is not the final sync safety layer. Before treating these guardrails as production-grade, address these follow-ups:
+
+- Remote path canonicalization must resolve `.` and `..` segments before validation and before any write/delete operation. A path like `/home/user/project/../../etc` must be rejected after canonicalization, not accepted because the raw string looked deep enough.
+- Remote macOS home folders need the same broad-folder protection as local home folders. `/Users/<user>/Downloads`, `/Users/<user>/Documents`, and `/Users/<user>/Desktop` must be rejected as roots; `/Users/<user>/Downloads/project-a` may be allowed.
+- Remote Linux home folders need explicit broad-folder protection. `/home/<user>` must be rejected; `/home/<user>/project-a` may be allowed. Sensitive descendants such as `/root/...`, `/usr/...`, `/opt/...`, `/var/lib/...`, `/var/log/...`, and `/etc/...` must not pass simply because they are deeper than three components.
+- Upload-only "advanced deploy" destinations such as `/var/www/site` are a product choice, not a general sync-safe default. If allowed, they need an explicit advanced confirmation and must remain disallowed for destructive mirror mode unless the user has deliberately created a managed remote root.
+- Missing remote target directories must be classified protocol-aware. FTP often reports a missing directory as a generic `550` / bad response rather than `fileNotFound`; brand-new dedicated targets should be allowed when the parent is accessible, while permission failures should remain blocking.
+- Remote modified-time comparisons must only drive skip/overwrite decisions when the timestamp source is trustworthy. SFTP attrs are usually reliable; FTP `MLSD modify` should be parsed as UTC; FTP `LIST` is not reliable enough for conflict decisions. If timestamp quality is unknown, mark the comparison uncertain instead of silently skipping uploads.
+- Directory-event burst caps must be visible. If a scan stops at a cap such as 500 files, the rule should show "scan truncated" and offer a rescan/manual initial sync, not silently drop the remaining files.
+- Collision checks should become recursive and type-aware for initial sync or mirror creation. A shallow same-name block is safe as a conservative first pass, but the final planner must report exact relative-path collisions and type conflicts.
+- App temp matching must cover both prefix and suffix forms such as `.__swiftftp_tmp__*` and `*.__swiftftp_tmp__`, matching the atomic upload plan below.
+
 ## Product Goal
 
 SwiftFTP should support a code-test workflow where computer A is the source of truth and computer B is a remote test machine:
