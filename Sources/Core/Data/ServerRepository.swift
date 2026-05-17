@@ -44,6 +44,16 @@ final class ServerRepository: @unchecked Sendable {
 
     func update(_ c: ServerConfig) { save(c) }
 
+    @discardableResult
+    func updateLastConnected(for id: UUID, at date: Date) -> ServerConfig? {
+        var all = fetchAll()
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return nil }
+        all[i].lastConnectedAt = date
+        let updated = all[i]
+        persist(all)
+        return updated
+    }
+
     func delete(_ id: UUID) {
         keychain.deletePassword(for: credentialAccount(for: id))
         var all = fetchAll(); all.removeAll { $0.id == id }; persist(all)
