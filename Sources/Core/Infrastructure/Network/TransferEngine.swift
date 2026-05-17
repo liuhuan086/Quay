@@ -109,15 +109,12 @@ actor TransferEngine {
 
             do {
                 if task.direction == .upload {
-                    await ensureRemoteParentDirectories(for: task.remotePath, using: client)
-                    try await client.upload(
-                        localURL: task.localURL,
-                        remotePath: task.remotePath,
-                        offset: offset
-                    ) { [weak self] progress in
-                        guard let self else { return }
-                        Task { await self.updateProgress(id: id, progress: progress) }
-                    }
+                    try await performAtomicUpload(
+                        task: task,
+                        offset: offset,
+                        using: client,
+                        progressID: id
+                    )
                 } else {
                     try await client.download(
                         remotePath: task.remotePath,
@@ -141,6 +138,26 @@ actor TransferEngine {
         } catch {
             await handleError(id: id, error: error)
         }
+    }
+
+    private func performAtomicUpload(
+        task: TransferTask,
+        offset: Int64,
+        using client: any AnyFTPClient,
+        progressID id: UUID
+    ) async throws {
+        let temporaryPath = SwiftFTPTempFile.temporaryRemotePath(for: task.remotePath)
+        await ensureRemoteParentDirectories(for: task.remotePath, using: client)
+        try await client.upload(
+            localURL: task.localURL,
+            remotePath: temporaryPath,
+            offset: offset
+        ) { [weak self] progress in
+            guard let self else { return }
+            Task { await self.updateProgress(id: id, progress: progress) }
+        }
+        try Task.checkCancellation()
+        try await client.rename(from: temporaryPath, to: task.remotePath)
     }
 
     // MARK: - Error handling + auto-retry

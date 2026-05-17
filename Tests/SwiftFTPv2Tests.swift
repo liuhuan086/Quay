@@ -350,6 +350,13 @@ final class ExclusionMatcherTests: XCTestCase {
         XCTAssertTrue(m.shouldExclude("/project/.DS_Store"))
     }
 
+    func test_defaultExcludesSwiftFTPTempFiles() {
+        let m = matcher(SyncWatcher.defaultExcludePatterns)
+        XCTAssertTrue(m.shouldExclude("/project/report.txt.__swiftftp_tmp__"))
+        XCTAssertTrue(m.shouldExclude("/project/.__swiftftp_tmp__uploading"))
+        XCTAssertFalse(m.shouldExclude("/project/report.txt"))
+    }
+
     private func matcher(_ patterns: [String]) -> ExclusionMatcher {
         ExclusionMatcher(patterns: patterns)
     }

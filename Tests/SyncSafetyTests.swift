@@ -500,6 +500,37 @@ final class SyncRuleCreationPolicyTests: XCTestCase {
     }
 }
 
+final class SwiftFTPTempFileTests: XCTestCase {
+
+    func test_temporaryRemotePathAppendsMarkerToFinalPath() {
+        XCTAssertEqual(
+            SwiftFTPTempFile.temporaryRemotePath(for: "/Users/liuhuan/Downloads/docs/main.swift"),
+            "/Users/liuhuan/Downloads/docs/main.swift.__swiftftp_tmp__"
+        )
+        XCTAssertEqual(
+            SwiftFTPTempFile.temporaryRemotePath(for: "docs/main.swift"),
+            "docs/main.swift.__swiftftp_tmp__"
+        )
+    }
+
+    func test_finalRemotePathStripsTemporaryMarker() {
+        XCTAssertEqual(
+            SwiftFTPTempFile.finalRemotePath(
+                forTemporaryPath: "/Users/liuhuan/Downloads/docs/main.swift.__swiftftp_tmp__"
+            ),
+            "/Users/liuhuan/Downloads/docs/main.swift"
+        )
+        XCTAssertNil(SwiftFTPTempFile.finalRemotePath(forTemporaryPath: "/Users/liuhuan/docs/main.swift"))
+    }
+
+    func test_temporaryNameDetectionHandlesPrefixSuffixAndCase() {
+        XCTAssertTrue(SwiftFTPTempFile.isTemporaryFileName("main.swift.__swiftftp_tmp__"))
+        XCTAssertTrue(SwiftFTPTempFile.isTemporaryFileName(".__swiftftp_tmp__uploading"))
+        XCTAssertTrue(SwiftFTPTempFile.isTemporaryFileName("MAIN.SWIFT.__SWIFTFTP_TMP__"))
+        XCTAssertFalse(SwiftFTPTempFile.isTemporaryFileName("main.swift"))
+    }
+}
+
 final class SyncWatcherCodingTests: XCTestCase {
 
     func test_legacyWatcherDecodesWithSafeDefaults() throws {

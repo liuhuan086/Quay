@@ -345,7 +345,8 @@ public struct SyncWatcher: Identifiable, Codable, Sendable {
         "node_modules", ".git", ".DS_Store", "*.log",
         ".env", ".env.*", "dist", "build", ".next", "__pycache__",
         ".venv", "venv", "*.swp", "*.tmp", "Thumbs.db", ".idea", ".vscode",
-        "DerivedData", "*.xcuserstate", ".__swiftftp_tmp__",
+        "DerivedData", "*.xcuserstate",
+        ".__swiftftp_tmp__", ".__swiftftp_tmp__*", "*.__swiftftp_tmp__",
         ".ssh", ".gnupg", ".aws", ".kube", "*.pem", "*.key",
         "id_rsa", "id_ed25519", ".netrc", ".npmrc", ".pypirc"
     ]

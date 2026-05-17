@@ -873,3 +873,30 @@ public enum SyncRuleCreationPolicy {
         }
     }
 }
+
+public enum SwiftFTPTempFile {
+    public static let marker = ".__swiftftp_tmp__"
+
+    public static func temporaryRemotePath(for remotePath: String) -> String {
+        remotePath + marker
+    }
+
+    public static func finalRemotePath(forTemporaryPath temporaryPath: String) -> String? {
+        guard temporaryPath.lowercased().hasSuffix(marker) else { return nil }
+        return String(temporaryPath.dropLast(marker.count))
+    }
+
+    public static func isTemporaryFileName(_ name: String) -> Bool {
+        let normalized = name
+            .folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            )
+            .lowercased()
+        return normalized.hasPrefix(marker) || normalized.hasSuffix(marker)
+    }
+
+    public static func isTemporaryPath(_ path: String) -> Bool {
+        isTemporaryFileName((path as NSString).lastPathComponent)
+    }
+}

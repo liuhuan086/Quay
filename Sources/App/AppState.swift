@@ -275,6 +275,7 @@ final class AppState: ObservableObject {
             }
 
             for item in items where item.name != "." && item.name != ".." {
+                if SwiftFTPTempFile.isTemporaryFileName(item.name) { continue }
                 let relativePath = relativePrefix.isEmpty
                     ? item.name
                     : relativePrefix + "/" + item.name

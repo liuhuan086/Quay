@@ -90,6 +90,12 @@ Acceptance:
 
 ## Step 4: Atomic Uploads
 
+Status:
+
+- Upload tasks write to `<filename>.__swiftftp_tmp__` and then rename into place.
+- SwiftFTP temp names are skipped by realtime watchers, local snapshots, remote snapshots, and default excludes.
+- Stale temp cleanup remains future work because destructive cleanup must be scoped to a managed root.
+
 Scope:
 
 - Upload to `<filename>.__swiftftp_tmp__`.

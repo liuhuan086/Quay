@@ -179,8 +179,7 @@ actor SyncManager {
     }
 
     private func isSwiftFTPTempName(_ name: String) -> Bool {
-        let lower = name.lowercased()
-        return lower.hasPrefix(".__swiftftp_tmp__") || lower.hasSuffix(".__swiftftp_tmp__")
+        SwiftFTPTempFile.isTemporaryFileName(name)
     }
 }
 
@@ -402,6 +401,7 @@ final class RealtimeSyncViewModel: ObservableObject {
             guard path.hasPrefix(rootPath) else { continue }
             let relativePath = String(path.dropFirst(rootPath.count))
             guard !relativePath.isEmpty else { continue }
+            if SwiftFTPTempFile.isTemporaryPath(relativePath) { continue }
 
             let values = try? fileURL.resourceValues(forKeys: Set(keys))
             let isDirectory = values?.isDirectory == true
