@@ -13,6 +13,10 @@ Before making release-oriented changes, read:
 - `Docs/AppStore_Readiness.md` for App Store blockers, pricing direction, and release gates.
 - `Docs/prompts.md` for professional AI/developer prompts and acceptance criteria.
 
+Before changing realtime sync, mirror sync, FSEvents monitoring, sync rule creation, or sync-driven upload/delete behavior, read:
+
+- `Docs/RealtimeSync_Mirror_Design.md` for one-way mirror semantics, deletion warnings, forbidden sync roots, initial sync planning, and safety acceptance criteria.
+
 Current release direction: SwiftFTP may become a small paid Mac App Store utility, but App Sandbox compatibility and Keychain-backed credential storage are mandatory before submission.
 
 ## Build & Test

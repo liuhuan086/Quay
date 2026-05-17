@@ -3,6 +3,7 @@
 > 配合 `Docs/AppStore_Readiness.md` 使用。
 > 每条 prompt 都是**自包含**的——可以直接在新会话里粘给 Claude Code（或当前会话），它能看懂上下文。
 > 顺序按 **Phase 1（必修）→ Phase 2（体验）→ Phase 3（商业化）** 排列；建议**自上而下**逐个执行，不要跳。
+> 修改实时同步、单向镜像、FSEvents 监听或同步删除前，必须先读 `Docs/RealtimeSync_Mirror_Design.md`。
 
 ---
 
