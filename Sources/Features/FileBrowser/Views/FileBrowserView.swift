@@ -140,12 +140,21 @@ struct FileBrowserView: View {
 
     private var compactBrowser: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $compactPane) {
-                Label("本地", systemImage: "desktopcomputer").tag(BrowserPane.local)
-                Label("远程", systemImage: server.protocol_.sfSymbol).tag(BrowserPane.remote)
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Picker("", selection: $compactPane) {
+                    Label("本地", systemImage: "desktopcomputer").tag(BrowserPane.local)
+                    Label("远程", systemImage: server.protocol_.sfSymbol).tag(BrowserPane.remote)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                Image(systemName: "info.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .help("拉宽窗口可显示本地和远程双栏")
+                Spacer(minLength: 0)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
 
