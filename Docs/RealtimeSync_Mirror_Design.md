@@ -2,6 +2,23 @@
 
 This document defines the intended product behavior and safety constraints for SwiftFTP realtime sync. Read it before changing `Sources/Features/RealtimeSync`, `FSEventWatcher`, `TransferEngine`, or any transfer behavior used by sync rules.
 
+## Implementation Status
+
+Most of this document is the **target** model. Track what is actually shipped here so the doc stays honest.
+
+**Shipped (commit `ac8e0a6`, "Harden realtime sync rule creation and overwrites") — guardrails-only pass on the existing upload-only mode:**
+
+- `SyncPathValidator` (`Sources/Core/Domain/SyncSafety.swift`): forbidden system/home roots, minimum depth (≥ 3 components), missing/symlink local root, non-absolute remote path, and overlapping-rule rejection. POSIX + Windows aware. Unit-tested.
+- Same-name collision block at rule creation (stops creation, lists colliding entries).
+- Conflict-safe overwrite: `SyncConflictDecision.shouldSkipUpload` — if the remote copy is newer than local (clock-skew tolerant, UTC compare), the upload is **skipped and surfaced** in the UI instead of clobbering newer remote work.
+- Mandatory secret excludes (`SyncWatcher.mandatorySecretExcludes`) always layered on user patterns; default excludes expanded.
+- Add-rule sheet: upload-only / no-delete / folder-behavior disclosure, required acknowledgement checkbox, second confirm echoing exact roots.
+- Directory-event scan skips symlinks and app temp files, and caps a single burst at 500 files.
+
+**Honest deviation from this doc:** mirror deletion is **not** implemented and local-delete events are hard-blocked in `RealtimeSyncView` `dispatch()`. Because remote deletion cannot occur, the rule-creation flow does **not** show a "remote files may be deleted" warning (that would be a false warning); it warns about the real risk — same-name remote overwrite. The "Rule Creation Safety" deletion-acknowledgement requirement below applies only once mirror mode actually ships.
+
+**Not yet implemented (still target-only):** one-way mirror mode, opt-in remote deletion, initial mirror sync planner, `.swiftftp-trash` quarantine, managed-root marker (`.swiftftp-mirror.json`), canary check, delete thresholds, B-side drift detection ("B missing → ask A"), rule state machine, atomic temp-rename uploads. The Acceptance Criteria section is the gate for that future phase.
+
 ## Product Goal
 
 SwiftFTP should support a code-test workflow where computer A is the source of truth and computer B is a remote test machine:
