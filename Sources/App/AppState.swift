@@ -1,6 +1,7 @@
 // AppState.swift — Swift 6 @MainActor global state
 import SwiftUI
 import Combine
+import ServiceManagement
 
 @MainActor
 final class TransferBadgeState: ObservableObject {
@@ -21,6 +22,54 @@ final class TransferBadgeState: ObservableObject {
     }
 }
 
+enum LaunchAtLoginState: Equatable {
+    case disabled
+    case enabled
+    case requiresApproval
+    case unavailable
+
+    var isToggleOn: Bool {
+        switch self {
+        case .enabled, .requiresApproval:
+            return true
+        case .disabled, .unavailable:
+            return false
+        }
+    }
+
+    var needsApproval: Bool {
+        self == .requiresApproval
+    }
+
+    var message: String {
+        switch self {
+        case .disabled:
+            return "SwiftFTP 不会在你登录 macOS 时自动启动。"
+        case .enabled:
+            return "SwiftFTP 会在你登录 macOS 时自动启动。"
+        case .requiresApproval:
+            return "已请求登录时启动，但还需要在系统设置的登录项中允许。"
+        case .unavailable:
+            return "当前系统无法读取登录项状态。"
+        }
+    }
+
+    static func current() -> LaunchAtLoginState {
+        switch SMAppService.mainApp.status {
+        case .notRegistered:
+            return .disabled
+        case .enabled:
+            return .enabled
+        case .requiresApproval:
+            return .requiresApproval
+        case .notFound:
+            return .unavailable
+        @unknown default:
+            return .unavailable
+        }
+    }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     // MARK: - Published
@@ -35,6 +84,7 @@ final class AppState: ObservableObject {
     @Published var isAddServerPresented = false
     @Published var isAboutPresented = false
     @Published var isPro = false
+    @Published var launchAtLoginState: LaunchAtLoginState = .current()
     @Published var trialStartedAt: Date? {
         didSet {
             if let trialStartedAt {
@@ -76,6 +126,7 @@ final class AppState: ObservableObject {
         wireStore()
         wireTrialTimer()
         applyTransferConcurrency()
+        refreshLaunchAtLoginStatus()
     }
 
     // MARK: - Server Management
@@ -156,6 +207,39 @@ final class AppState: ObservableObject {
     func updateTransferConcurrencyPreference(_ value: Int) {
         UserDefaults.standard.set(value, forKey: "maxConcurrent")
         applyTransferConcurrency()
+    }
+
+    func refreshLaunchAtLoginStatus() {
+        launchAtLoginState = .current()
+    }
+
+    func setLaunchAtLoginEnabled(_ isEnabled: Bool) {
+        do {
+            if isEnabled {
+                if launchAtLoginState != .enabled && launchAtLoginState != .requiresApproval {
+                    try SMAppService.mainApp.register()
+                }
+            } else if launchAtLoginState != .disabled && launchAtLoginState != .unavailable {
+                try SMAppService.mainApp.unregister()
+            }
+            refreshLaunchAtLoginStatus()
+            if launchAtLoginState.needsApproval {
+                alertItem = AlertItem(
+                    title: "需要允许登录项",
+                    message: "请在系统设置的“登录项”中允许 SwiftFTP，之后它会在登录 macOS 时自动启动。"
+                )
+            }
+        } catch {
+            refreshLaunchAtLoginStatus()
+            alertItem = AlertItem(
+                title: "登录项设置失败",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 
     func updateServer(_ config: ServerConfig) async {

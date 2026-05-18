@@ -550,6 +550,22 @@ struct SettingsRootView: View {
                         appState.updateTransferConcurrencyPreference(newValue)
                     }
                     .disabled(!appState.hasFullAccess)
+                Toggle(
+                    "登录时启动 SwiftFTP",
+                    isOn: Binding(
+                        get: { appState.launchAtLoginState.isToggleOn },
+                        set: { appState.setLaunchAtLoginEnabled($0) }
+                    )
+                )
+                .disabled(appState.launchAtLoginState == .unavailable)
+                Text(appState.launchAtLoginState.message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if appState.launchAtLoginState.needsApproval {
+                    Button("打开系统登录项设置") {
+                        appState.openLoginItemsSettings()
+                    }
+                }
                 HStack {
                     Text("同步防抖延迟")
                     Slider(value: $debounce, in: 0.1...2.0, step: 0.1)
@@ -621,7 +637,10 @@ struct SettingsRootView: View {
             }
             .padding().tabItem { Label("购买", systemImage: "cart") }
         }
-        .frame(width: 500, height: 320)
+        .frame(width: 500, height: 360)
         .padding()
+        .onAppear {
+            appState.refreshLaunchAtLoginStatus()
+        }
     }
 }
