@@ -36,8 +36,24 @@ actor TransferEngine {
         runningTasks.removeValue(forKey: id)
         runningIDs.remove(id)
         if let idx = tasks.firstIndex(where: { $0.id == id }) {
+            guard !tasks[idx].status.isCompletedOrCancelled else { return }
             tasks[idx].status = .cancelled
             notifyUpdate(tasks[idx])
+        }
+        drainQueue()
+    }
+
+    func cancel(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            runningTasks[id]?.cancel()
+            runningTasks.removeValue(forKey: id)
+            runningIDs.remove(id)
+            if let idx = tasks.firstIndex(where: { $0.id == id }) {
+                guard !tasks[idx].status.isCompletedOrCancelled else { continue }
+                tasks[idx].status = .cancelled
+                notifyUpdate(tasks[idx])
+            }
         }
         drainQueue()
     }
@@ -47,9 +63,36 @@ actor TransferEngine {
         runningTasks.removeValue(forKey: id)
         runningIDs.remove(id)
         if let idx = tasks.firstIndex(where: { $0.id == id }) {
-            tasks[idx].status = .paused(resumeOffset: tasks[idx].bytesTransferred)
-            notifyUpdate(tasks[idx])
+            switch tasks[idx].status {
+            case .queued, .inProgress:
+                tasks[idx].status = .paused(resumeOffset: tasks[idx].bytesTransferred)
+                notifyUpdate(tasks[idx])
+            default:
+                break
+            }
         }
+        // Pausing a running task frees a concurrency slot; let the queue advance.
+        drainQueue()
+    }
+
+    func pause(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            runningTasks[id]?.cancel()
+            runningTasks.removeValue(forKey: id)
+            runningIDs.remove(id)
+            if let idx = tasks.firstIndex(where: { $0.id == id }) {
+                switch tasks[idx].status {
+                case .queued, .inProgress:
+                    break
+                default:
+                    continue
+                }
+                tasks[idx].status = .paused(resumeOffset: tasks[idx].bytesTransferred)
+                notifyUpdate(tasks[idx])
+            }
+        }
+        drainQueue()
     }
 
     func resume(id: UUID) {
@@ -61,10 +104,72 @@ actor TransferEngine {
         drainQueue()
     }
 
+    func resume(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            guard let idx = tasks.firstIndex(where: { $0.id == id }),
+                  case .paused(let offset) = tasks[idx].status else { continue }
+            tasks[idx].resumeOffset = offset
+            tasks[idx].status = .queued
+            notifyUpdate(tasks[idx])
+        }
+        drainQueue()
+    }
+
+    func startOrRetry(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            guard let idx = tasks.firstIndex(where: { $0.id == id }) else { continue }
+            switch tasks[idx].status {
+            case .paused(let offset):
+                tasks[idx].resumeOffset = offset
+                tasks[idx].status = .queued
+            case .failed, .cancelled:
+                tasks[idx].retryCount = 0
+                tasks[idx].bytesTransferred = 0
+                tasks[idx].resumeOffset = 0
+                tasks[idx].startedAt = nil
+                tasks[idx].completedAt = nil
+                tasks[idx].status = .queued
+            case .queued:
+                break
+            default:
+                continue
+            }
+            notifyUpdate(tasks[idx])
+        }
+        drainQueue()
+    }
+
     func allTasks() -> [TransferTask] { tasks }
 
     func clearCompleted() {
         tasks.removeAll { $0.status == .completed || $0.status == .cancelled }
+    }
+
+    func clearUnfinished() {
+        let ids = Set(tasks.filter { $0.status.isUnfinished }.map(\.id))
+        remove(ids: ids)
+    }
+
+    func clearAll() {
+        for task in runningTasks.values {
+            task.cancel()
+        }
+        runningTasks.removeAll()
+        runningIDs.removeAll()
+        tasks.removeAll()
+    }
+
+    func remove(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            runningTasks[id]?.cancel()
+            runningTasks.removeValue(forKey: id)
+            runningIDs.remove(id)
+        }
+        tasks.removeAll { ids.contains($0.id) }
+        drainQueue()
     }
 
     // MARK: - Internal queue drain

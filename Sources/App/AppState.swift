@@ -27,6 +27,7 @@ final class AppState: ObservableObject {
     @Published var servers: [ServerConfig] = []
     @Published var connectionStates: [UUID: ConnectionState] = [:]
     @Published var transfers: [TransferTask] = []
+    @Published var transferBatches: [TransferBatch] = []
     @Published var syncWatchers: [UUID: SyncWatcher] = [:]
     @Published var selectedServerID: UUID?
     @Published var alertItem: AlertItem?
@@ -293,18 +294,129 @@ final class AppState: ObservableObject {
         direction: TransferDirection,
         localURL: URL,
         remotePath: String,
-        isAutoSync: Bool = false
+        isAutoSync: Bool = false,
+        fileSize: Int64? = nil,
+        batchID: UUID? = nil
     ) async {
         let attrs = try? FileManager.default.attributesOfItem(atPath: localURL.path)
-        let size  = (attrs?[.size] as? Int64) ?? 0
+        let size  = fileSize ?? (attrs?[.size] as? Int64) ?? 0
         let task  = TransferTask(
             serverID: server.id, serverName: server.displayName,
             direction: direction, localURL: localURL, remotePath: remotePath,
-            fileSize: size, isAutoSync: isAutoSync
+            fileSize: size, isAutoSync: isAutoSync, batchID: batchID
         )
         transfers.append(task)
         transferBadgeState.update(from: transfers)
         await engine.enqueue(task)
+    }
+
+    @discardableResult
+    func beginTransferBatch(
+        server: ServerConfig,
+        direction: TransferDirection,
+        name: String,
+        localRootURL: URL,
+        remoteRootPath: String
+    ) -> UUID {
+        let batch = TransferBatch(
+            serverID: server.id,
+            serverName: server.displayName,
+            direction: direction,
+            name: name,
+            localRootURL: localRootURL,
+            remoteRootPath: remoteRootPath
+        )
+        transferBatches.append(batch)
+        return batch.id
+    }
+
+    func finishTransferBatch(id: UUID, expectedFileCount: Int) {
+        guard let idx = transferBatches.firstIndex(where: { $0.id == id }) else { return }
+        transferBatches[idx].expectedFileCount = expectedFileCount
+        transferBatches[idx].isPrepared = true
+    }
+
+    func clearCompletedTransfers() async {
+        let batchIDsToRemove = Set(transferBatches.filter { isCompletedOrCancelledBatch($0) }.map(\.id))
+        await engine.clearCompleted()
+        transfers.removeAll { $0.status.isCompletedOrCancelled }
+        transferBatches.removeAll { batchIDsToRemove.contains($0.id) }
+        transferBadgeState.update(from: transfers)
+    }
+
+    func clearUnfinishedTransfers() async {
+        let unfinishedIDs = Set(transfers.filter { $0.status.isUnfinished }.map(\.id))
+        await engine.clearUnfinished()
+        transfers.removeAll { unfinishedIDs.contains($0.id) }
+        pruneBatchesAfterTaskRemoval()
+        transferBadgeState.update(from: transfers)
+    }
+
+    func clearAllTransfers() async {
+        await engine.clearAll()
+        transfers.removeAll()
+        transferBatches.removeAll()
+        transferBadgeState.update(from: transfers)
+    }
+
+    func removeTransfers(matching selection: Set<UUID>) async {
+        let taskIDs = taskIDs(matching: selection)
+        await engine.remove(ids: taskIDs)
+        transfers.removeAll { taskIDs.contains($0.id) }
+        transferBatches.removeAll { selection.contains($0.id) }
+        pruneBatchesAfterTaskRemoval()
+        transferBadgeState.update(from: transfers)
+    }
+
+    func pauseTransfers(matching selection: Set<UUID>) async {
+        await engine.pause(ids: taskIDs(matching: selection))
+    }
+
+    func resumeTransfers(matching selection: Set<UUID>) async {
+        await engine.resume(ids: taskIDs(matching: selection))
+    }
+
+    func cancelTransfers(matching selection: Set<UUID>) async {
+        await engine.cancel(ids: taskIDs(matching: selection))
+    }
+
+    func startOrRetryTransfers(matching selection: Set<UUID>) async {
+        await engine.startOrRetry(ids: taskIDs(matching: selection))
+    }
+
+    func startOrRetryUnfinishedTransfers() async {
+        let ids = Set(transfers.filter { $0.status.isUnfinished }.map(\.id))
+        await engine.startOrRetry(ids: ids)
+    }
+
+    func discardEmptyTransferBatches(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        let activeBatchIDs = Set(transfers.compactMap(\.batchID))
+        transferBatches.removeAll { ids.contains($0.id) && !activeBatchIDs.contains($0.id) }
+    }
+
+    private func taskIDs(matching selection: Set<UUID>) -> Set<UUID> {
+        guard !selection.isEmpty else { return [] }
+        let selectedBatchIDs = Set(transferBatches.map(\.id)).intersection(selection)
+        return Set(transfers.filter { task in
+            selection.contains(task.id) || task.batchID.map { selectedBatchIDs.contains($0) } == true
+        }.map(\.id))
+    }
+
+    private func isCompletedOrCancelledBatch(_ batch: TransferBatch) -> Bool {
+        guard batch.isPrepared else { return false }
+        let tasks = transfers.filter { $0.batchID == batch.id }
+        if batch.expectedFileCount == 0 {
+            return true
+        }
+        return !tasks.isEmpty && tasks.allSatisfy { $0.status.isCompletedOrCancelled }
+    }
+
+    private func pruneBatchesAfterTaskRemoval() {
+        let activeBatchIDs = Set(transfers.compactMap(\.batchID))
+        transferBatches.removeAll { batch in
+            batch.isPrepared && batch.expectedFileCount > 0 && !activeBatchIDs.contains(batch.id)
+        }
     }
 
     // MARK: - Engine wiring
