@@ -135,6 +135,7 @@ final class ServerRepository: @unchecked Sendable {
     private actor ServerRepositoryStore {
         private let key: String
         private let keychain: any KeychainStoring
+        private var blockedCredentialIDsKey: String { "\(key).blockedCredentialIDs" }
 
         init(key: String, keychain: any KeychainStoring) {
             self.key = key
@@ -150,6 +151,7 @@ final class ServerRepository: @unchecked Sendable {
             for i in legacyIndices {
                 do {
                     try keychain.savePassword(all[i].password, for: credentialAccount(for: all[i].id), label: all[i].displayName)
+                    unblockCredential(for: all[i].id)
                     all[i].password = ""
                 } catch {
                     migratedAll = false
@@ -169,24 +171,28 @@ final class ServerRepository: @unchecked Sendable {
         func password(for id: UUID) throws -> String {
             let account = credentialAccount(for: id)
             var readError: Error?
-            do {
-                if let password = try keychain.getPassword(for: account) {
-                    return password
+            if !isCredentialBlocked(id) {
+                do {
+                    if let password = try keychain.getPassword(for: account) {
+                        return password
+                    }
+                } catch {
+                    readError = error
                 }
-            } catch {
-                readError = error
             }
 
             // No Keychain entry yet — run the all-or-nothing legacy migration
             // (never a per-entry persist, which would drop other legacy
             // credentials), then read back.
             migrateLegacyPasswordsIfNeeded()
-            do {
-                if let password = try keychain.getPassword(for: account) {
-                    return password
+            if !isCredentialBlocked(id) {
+                do {
+                    if let password = try keychain.getPassword(for: account) {
+                        return password
+                    }
+                } catch {
+                    readError = error
                 }
-            } catch {
-                readError = error
             }
 
             // Migration could not reach the Keychain (e.g. locked). Fall back
@@ -203,8 +209,10 @@ final class ServerRepository: @unchecked Sendable {
         func deletePassword(for id: UUID) throws {
             let existing = loadList()
             guard keychain.deletePassword(for: credentialAccount(for: id)) else {
+                blockCredential(for: id)
                 throw ServerRepositoryError.keychainDeleteFailed
             }
+            unblockCredential(for: id)
             var all = existing
             if let index = all.firstIndex(where: { $0.id == id }) {
                 all[index].password = ""
@@ -255,9 +263,14 @@ final class ServerRepository: @unchecked Sendable {
         @discardableResult
         func delete(_ id: UUID) -> Bool {
             let existing = loadList()
-            // Best-effort credential scrub. A failure leaves an inert item
-            // keyed by a never-reused UUID; never block removing the server.
+            // Best-effort credential scrub. If deletion fails, block future
+            // reads for this id so a re-import cannot reuse the stale secret.
             let credentialCleared = keychain.deletePassword(for: credentialAccount(for: id))
+            if credentialCleared {
+                unblockCredential(for: id)
+            } else {
+                blockCredential(for: id)
+            }
             var all = existing
             all.removeAll { $0.id == id }
             persist(all, preservingLegacyPasswordsFrom: existing, strippingLegacyPasswordFor: [id])
@@ -315,15 +328,49 @@ final class ServerRepository: @unchecked Sendable {
             if config.password.isEmpty {
                 guard shouldDeleteEmptyCredential else { return }
                 guard keychain.deletePassword(for: account) else {
+                    blockCredential(for: config.id)
                     throw ServerRepositoryError.keychainDeleteFailed
                 }
+                unblockCredential(for: config.id)
             } else {
                 try keychain.savePassword(config.password, for: account, label: config.displayName)
+                unblockCredential(for: config.id)
             }
         }
 
         private func credentialAccount(for id: UUID) -> String {
             id.uuidString
+        }
+
+        private func isCredentialBlocked(_ id: UUID) -> Bool {
+            loadBlockedCredentialIDs().contains(id)
+        }
+
+        private func blockCredential(for id: UUID) {
+            var ids = loadBlockedCredentialIDs()
+            ids.insert(id)
+            saveBlockedCredentialIDs(ids)
+        }
+
+        private func unblockCredential(for id: UUID) {
+            var ids = loadBlockedCredentialIDs()
+            guard ids.remove(id) != nil else { return }
+            saveBlockedCredentialIDs(ids)
+        }
+
+        private func loadBlockedCredentialIDs() -> Set<UUID> {
+            guard let raw = UserDefaults.standard.array(forKey: blockedCredentialIDsKey) as? [String] else {
+                return []
+            }
+            return Set(raw.compactMap(UUID.init(uuidString:)))
+        }
+
+        private func saveBlockedCredentialIDs(_ ids: Set<UUID>) {
+            if ids.isEmpty {
+                UserDefaults.standard.removeObject(forKey: blockedCredentialIDsKey)
+            } else {
+                UserDefaults.standard.set(ids.map(\.uuidString).sorted(), forKey: blockedCredentialIDsKey)
+            }
         }
 
         private func strippedLegacyPasswordIDs(for config: ServerConfig, policy: CredentialPolicy) -> Set<UUID> {
