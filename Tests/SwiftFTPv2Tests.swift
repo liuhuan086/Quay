@@ -205,22 +205,23 @@ final class ServerRepositoryTests: XCTestCase {
         repo = ServerRepository(key: repoKey)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         for server in repo.fetchAll() {
-            repo.delete(server.id)
+            await repo.delete(server.id)
         }
         UserDefaults.standard.removeObject(forKey: repoKey)
         repo = nil
         repoKey = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
-    func test_saveAndFetch() {
+    func test_saveAndFetch() async {
         let c = makeCfg("Repo Test", password: "secret")
-        repo.save(c)
+        await repo.save(c)
         let fetched = repo.fetchAll().first(where: { $0.id == c.id })
         XCTAssertEqual(fetched?.password, "")
-        XCTAssertEqual(repo.password(for: c.id), "secret")
+        let resolved = await repo.password(for: c.id)
+        XCTAssertEqual(resolved, "secret")
         let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
             String(data: $0, encoding: .utf8)
         } ?? ""
@@ -228,47 +229,47 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertFalse(persisted.contains("\"password\""))
     }
 
-    func test_update() {
+    func test_update() async {
         var c = makeCfg("Update Test")
-        repo.save(c)
+        await repo.save(c)
         c.displayName = "Updated"
-        repo.update(c)
+        await repo.update(c)
         XCTAssertEqual(repo.fetchAll().first(where: { $0.id == c.id })?.displayName, "Updated")
     }
 
-    func test_updateLastConnectedPreservesDisplayName() {
+    func test_updateLastConnectedPreservesDisplayName() async {
         var c = makeCfg("192.168.2.4")
-        repo.save(c)
+        await repo.save(c)
 
         c.displayName = "Mac"
-        repo.update(c)
+        await repo.update(c)
 
         let connectedAt = Date(timeIntervalSince1970: 1_770_000_000)
-        repo.updateLastConnected(for: c.id, at: connectedAt)
+        await repo.updateLastConnected(for: c.id, at: connectedAt)
 
         let fetched = repo.fetchAll().first(where: { $0.id == c.id })
         XCTAssertEqual(fetched?.displayName, "Mac")
         XCTAssertEqual(fetched?.lastConnectedAt, connectedAt)
     }
 
-    func test_delete() {
+    func test_delete() async {
         let c = makeCfg("Delete Test")
-        repo.save(c)
-        repo.delete(c.id)
+        await repo.save(c)
+        await repo.delete(c.id)
         XCTAssertFalse(repo.fetchAll().contains(where: { $0.id == c.id }))
     }
 
-    func test_exportImport() throws {
+    func test_exportImport() async throws {
         let c = makeCfg("Export")
-        repo.save(c)
+        await repo.save(c)
         let data = try repo.exportJSON()
         XCTAssertFalse(data.isEmpty)
-        repo.delete(c.id)
-        try repo.importJSON(data)
+        await repo.delete(c.id)
+        try await repo.importJSON(data)
         XCTAssertTrue(repo.fetchAll().contains(where: { $0.id == c.id }))
     }
 
-    func test_legacyPasswordMigratesToKeychainAndIsRemovedFromDefaults() throws {
+    func test_legacyPasswordMigratesToKeychainAndIsRemovedFromDefaults() async throws {
         let id = UUID()
         let legacyJSON = """
         [{
@@ -286,7 +287,8 @@ final class ServerRepositoryTests: XCTestCase {
 
         let fetched = repo.fetchAll()
         XCTAssertEqual(fetched.first?.password, "")
-        XCTAssertEqual(repo.password(for: id), "legacy-secret")
+        let resolved = await repo.password(for: id)
+        XCTAssertEqual(resolved, "legacy-secret")
         XCTAssertEqual(try KeychainManager.shared.getPassword(for: id.uuidString), "legacy-secret")
 
         let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
@@ -296,15 +298,71 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertFalse(persisted.contains("\"password\""))
     }
 
-    func test_sortedByDisplayName() {
+    func test_onDemandLegacyLookupDoesNotDropOtherLegacyPasswords() async throws {
+        let id1 = UUID()
+        let id2 = UUID()
+        let legacyJSON = """
+        [{
+          "id": "\(id1.uuidString)",
+          "displayName": "Legacy One",
+          "host": "one.local",
+          "username": "u",
+          "password": "secret-one"
+        },{
+          "id": "\(id2.uuidString)",
+          "displayName": "Legacy Two",
+          "host": "two.local",
+          "username": "u",
+          "password": "secret-two"
+        }]
+        """
+        UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: repoKey)
+        defer {
+            KeychainManager.shared.deletePassword(for: id1.uuidString)
+            KeychainManager.shared.deletePassword(for: id2.uuidString)
+        }
+
+        // On-demand lookup for the first server (before any bulk migration)
+        // must not erase the second server's still-unmigrated password.
+        let one = await repo.password(for: id1)
+        XCTAssertEqual(one, "secret-one")
+
+        let two = await repo.password(for: id2)
+        XCTAssertEqual(two, "secret-two")
+        XCTAssertEqual(try KeychainManager.shared.getPassword(for: id2.uuidString), "secret-two")
+
+        let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
+            String(data: $0, encoding: .utf8)
+        } ?? ""
+        XCTAssertFalse(persisted.contains("secret-one"))
+        XCTAssertFalse(persisted.contains("secret-two"))
+    }
+
+    func test_sortedByDisplayName() async {
         let b = makeCfg("B-Server")
         let a = makeCfg("A-Server")
-        repo.save(b); repo.save(a)
+        await repo.save(b); await repo.save(a)
         let all = repo.fetchAll()
         let names = all.map { $0.displayName }
         if let ai = names.firstIndex(of: "A-Server"), let bi = names.firstIndex(of: "B-Server") {
             XCTAssertLessThan(ai, bi, "Should be sorted alphabetically")
         }
+    }
+
+    func test_concurrentSavesPreserveAllServers() async {
+        let configs = (0..<25).map { makeCfg("Concurrent \($0)") }
+        let repo = self.repo!
+
+        await withTaskGroup(of: Void.self) { group in
+            for config in configs {
+                group.addTask {
+                    await repo.save(config)
+                }
+            }
+        }
+
+        let savedIDs = Set(repo.fetchAll().map(\.id))
+        XCTAssertTrue(configs.allSatisfy { savedIDs.contains($0.id) })
     }
 
     private func makeCfg(_ name: String, password: String = "") -> ServerConfig {
@@ -506,16 +564,16 @@ final class PerformanceTests: XCTestCase {
         }
     }
 
-    func test_repository_fetchAll_performance() {
+    func test_repository_fetchAll_performance() async {
         let key = "swiftftp.tests.performance.\(UUID().uuidString)"
         let repo = ServerRepository(key: key)
         // Pre-populate
         let configs = (0..<20).map {
             ServerConfig(displayName: "Server \($0)", host: "host\($0).com", username: "u")
         }
-        configs.forEach { repo.save($0) }
+        for c in configs { await repo.save(c) }
         measure { _ = repo.fetchAll() }
-        configs.forEach { repo.delete($0.id) }
+        for c in configs { await repo.delete(c.id) }
         UserDefaults.standard.removeObject(forKey: key)
     }
 }

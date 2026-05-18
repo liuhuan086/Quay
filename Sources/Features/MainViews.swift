@@ -79,8 +79,10 @@ struct RootView: View {
             set: { appState.isAddServerPresented = $0 }
         )) {
             ServerEditView(config: nil, servers: appState.servers) { cfg in
-                appState.saveServer(cfg)
-                Task { await appState.connect(to: cfg) }
+                Task {
+                    await appState.saveServer(cfg)
+                    await appState.connect(to: cfg)
+                }
             }
         }
         .sheet(isPresented: Binding(
@@ -669,12 +671,16 @@ struct AppMenuCommands: Commands {
         panel.canChooseDirectories = false
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            do {
-                let data = try Data(contentsOf: url)
-                try appState.repository.importJSON(data)
-                appState.loadServers()
-            } catch {
-                appState.showError(error)
+            Task { @MainActor in
+                do {
+                    let data = try await Task.detached(priority: .userInitiated) {
+                        try Data(contentsOf: url)
+                    }.value
+                    try await appState.repository.importJSON(data)
+                    appState.loadServers()
+                } catch {
+                    appState.showError(error)
+                }
             }
         }
     }

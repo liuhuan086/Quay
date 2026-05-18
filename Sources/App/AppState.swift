@@ -68,6 +68,7 @@ final class AppState: ObservableObject {
         hasSeenOnboarding = UserDefaults.standard.bool(forKey: hasSeenOnboardingKey)
         trialStartedAt = UserDefaults.standard.object(forKey: trialStartedAtKey) as? Date
         loadServers()
+        Task { await migrateLegacyServerPasswordsIfNeeded() }
         loadSyncWatchers()
         wireEngine()
         wireStore()
@@ -77,6 +78,11 @@ final class AppState: ObservableObject {
 
     // MARK: - Server Management
     func loadServers() { servers = repository.fetchAll() }
+
+    private func migrateLegacyServerPasswordsIfNeeded() async {
+        await repository.migrateLegacyPasswordsIfNeeded()
+        loadServers()
+    }
 
     func presentAddServer() {
         guard hasFullAccess else {
@@ -101,12 +107,12 @@ final class AppState: ObservableObject {
         hasSeenOnboarding = false
     }
 
-    func saveServer(_ config: ServerConfig) {
+    func saveServer(_ config: ServerConfig) async {
         guard hasFullAccess || servers.contains(where: { $0.id == config.id }) else {
             alertItem = AlertItem(title: "试用已结束", message: "请购买 Pro 后保存服务器配置。")
             return
         }
-        repository.save(config, credentialPolicy: .replace)
+        await repository.save(config, credentialPolicy: .replace)
         loadServers()
     }
 
@@ -144,7 +150,7 @@ final class AppState: ObservableObject {
     }
 
     func updateServer(_ config: ServerConfig) async {
-        repository.update(config, credentialPolicy: .replaceIfNonEmpty)
+        await repository.update(config, credentialPolicy: .replaceIfNonEmpty)
         if !config.password.isEmpty {
             await ConnectionPoolRegistry.shared.updateCachedPassword(config.password, forServerID: config.id)
         }
@@ -154,7 +160,7 @@ final class AppState: ObservableObject {
     func clearSavedPasswords() async {
         let serverIDs = servers.map(\.id)
         for id in serverIDs {
-            repository.deletePassword(for: id)
+            await repository.deletePassword(for: id)
             await ConnectionPoolRegistry.shared.updateCachedPassword("", forServerID: id)
         }
         loadServers()
@@ -162,7 +168,7 @@ final class AppState: ObservableObject {
 
     func deleteServer(_ config: ServerConfig) async {
         await ConnectionPoolRegistry.shared.removePool(for: config.id)
-        repository.delete(config.id)
+        await repository.delete(config.id)
         connectionStates.removeValue(forKey: config.id)
         syncWatchers = syncWatchers.filter { $0.value.serverID != config.id }
         persistSyncWatchers()
@@ -234,13 +240,13 @@ final class AppState: ObservableObject {
         do {
             var connectionConfig = server
             if connectionConfig.password.isEmpty {
-                connectionConfig.password = repository.password(for: server.id)
+                connectionConfig.password = await repository.password(for: server.id)
             }
             let pool = await ConnectionPoolRegistry.shared.pool(for: connectionConfig, maxSize: 5)
             let client = try await pool.borrowClient(password: connectionConfig.password)
             connectionStates[server.id] = .connected(client: client)
             selectedServerID = server.id
-            repository.updateLastConnected(for: server.id, at: Date())
+            await repository.updateLastConnected(for: server.id, at: Date())
             loadServers()
         } catch {
             connectionStates[server.id] = .failed(error)
