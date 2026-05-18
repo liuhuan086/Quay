@@ -345,9 +345,8 @@ final class AppState: ObservableObject {
     }
 
     func clearUnfinishedTransfers() async {
-        let unfinishedIDs = Set(transfers.filter { $0.status.isUnfinished }.map(\.id))
-        await engine.clearUnfinished()
-        transfers.removeAll { unfinishedIDs.contains($0.id) }
+        let removedIDs = await engine.clearUnfinished()
+        transfers.removeAll { removedIDs.contains($0.id) }
         pruneBatchesAfterTaskRemoval()
         transferBadgeState.update(from: transfers)
     }
@@ -361,8 +360,8 @@ final class AppState: ObservableObject {
 
     func removeTransfers(matching selection: Set<UUID>) async {
         let taskIDs = taskIDs(matching: selection)
-        await engine.remove(ids: taskIDs)
-        transfers.removeAll { taskIDs.contains($0.id) }
+        let removedTaskIDs = await engine.remove(ids: taskIDs)
+        transfers.removeAll { removedTaskIDs.contains($0.id) }
         transferBatches.removeAll { selection.contains($0.id) }
         pruneBatchesAfterTaskRemoval()
         transferBadgeState.update(from: transfers)

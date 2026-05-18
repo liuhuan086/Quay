@@ -8,6 +8,7 @@ actor TransferEngine {
     // MARK: Config
     var maxConcurrent: Int = 3
     private let retryDelay: TimeInterval = 2.0
+    private let startsTasksAutomatically: Bool
 
     // MARK: State
     private var tasks: [TransferTask] = []
@@ -18,6 +19,10 @@ actor TransferEngine {
     var onUpdate: (@Sendable (TransferTask) -> Void)?
     var onComplete: (@Sendable (TransferTask) -> Void)?
     var onFailure: (@Sendable (TransferTask) -> Void)?
+
+    init(startsTasksAutomatically: Bool = true) {
+        self.startsTasksAutomatically = startsTasksAutomatically
+    }
 
     // MARK: - Enqueue
     func enqueue(_ task: TransferTask) {
@@ -143,13 +148,17 @@ actor TransferEngine {
 
     func allTasks() -> [TransferTask] { tasks }
 
-    func clearCompleted() {
-        tasks.removeAll { $0.status == .completed || $0.status == .cancelled }
+    @discardableResult
+    func clearCompleted() -> Set<UUID> {
+        let ids = Set(tasks.filter { $0.status.isCompletedOrCancelled }.map(\.id))
+        tasks.removeAll { ids.contains($0.id) }
+        return ids
     }
 
-    func clearUnfinished() {
+    @discardableResult
+    func clearUnfinished() -> Set<UUID> {
         let ids = Set(tasks.filter { $0.status.isUnfinished }.map(\.id))
-        remove(ids: ids)
+        return remove(ids: ids)
     }
 
     func clearAll() {
@@ -161,19 +170,23 @@ actor TransferEngine {
         tasks.removeAll()
     }
 
-    func remove(ids: Set<UUID>) {
-        guard !ids.isEmpty else { return }
+    @discardableResult
+    func remove(ids: Set<UUID>) -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        let existingIDs = Set(tasks.filter { ids.contains($0.id) }.map(\.id))
         for id in ids {
             runningTasks[id]?.cancel()
             runningTasks.removeValue(forKey: id)
             runningIDs.remove(id)
         }
-        tasks.removeAll { ids.contains($0.id) }
+        tasks.removeAll { existingIDs.contains($0.id) }
         drainQueue()
+        return existingIDs
     }
 
     // MARK: - Internal queue drain
     private func drainQueue() {
+        guard startsTasksAutomatically else { return }
         let queued = tasks.filter {
             if case .queued = $0.status { return true }; return false
         }
@@ -194,7 +207,14 @@ actor TransferEngine {
 
     // MARK: - Execute one task
     private func executeTask(id: UUID) async {
-        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        guard let idx = tasks.firstIndex(where: { $0.id == id }) else {
+            finishRunningTaskWithoutStateChange(id: id)
+            return
+        }
+        guard case .queued = tasks[idx].status else {
+            finishRunningTaskWithoutStateChange(id: id)
+            return
+        }
         var task = tasks[idx]
         task.startedAt = Date()
         task.status = .inProgress(progress: 0, bytesPerSecond: 0)
@@ -209,11 +229,16 @@ actor TransferEngine {
         do {
             let client = try await pool.borrowClient()
 
-            let offset = tasks.first(where: { $0.id == id })?.resumeOffset ?? 0
-
             do {
+                try Task.checkCancellation()
+                guard isTaskInProgress(id: id) else { throw CancellationError() }
+
+                let offset = tasks.first(where: { $0.id == id })?.resumeOffset ?? 0
+
                 if task.direction == .upload {
                     await ensureRemoteParentDirectories(for: task.remotePath, using: client)
+                    try Task.checkCancellation()
+                    guard isTaskInProgress(id: id) else { throw CancellationError() }
                     try await client.upload(
                         localURL: task.localURL,
                         remotePath: task.remotePath,
@@ -232,6 +257,7 @@ actor TransferEngine {
                         Task { await self.updateProgress(id: id, progress: progress) }
                     }
                 }
+                try Task.checkCancellation()
                 await pool.returnClient(client)
             } catch {
                 await pool.returnClient(client)
@@ -241,7 +267,7 @@ actor TransferEngine {
             markCompleted(id: id)
 
         } catch is CancellationError {
-            // Task was cancelled / paused — state already set by caller
+            handleCancellation(id: id)
         } catch {
             await handleError(id: id, error: error)
         }
@@ -250,6 +276,10 @@ actor TransferEngine {
     // MARK: - Error handling + auto-retry
     private func handleError(id: UUID, error: Error) async {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        guard case .inProgress = tasks[idx].status else {
+            finishRunningTaskWithoutStateChange(id: id)
+            return
+        }
         let friendly = FTPError.friendly(error)
 
         // 鉴权失败、文件不存在、权限不足、不支持等错误重试也无意义，立即报错
@@ -329,6 +359,10 @@ actor TransferEngine {
 
     private func markCompleted(id: UUID) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        guard case .inProgress = tasks[idx].status else {
+            finishRunningTaskWithoutStateChange(id: id)
+            return
+        }
         tasks[idx].status = .completed
         tasks[idx].completedAt = Date()
         runningIDs.remove(id)
@@ -341,7 +375,10 @@ actor TransferEngine {
 
     private func markFailed(id: UUID, message: String) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }),
-              tasks[idx].status != .completed else { return }
+              case .inProgress = tasks[idx].status else {
+            finishRunningTaskWithoutStateChange(id: id)
+            return
+        }
         tasks[idx].status = .failed(message: message)
         runningIDs.remove(id)
         runningTasks.removeValue(forKey: id)
@@ -353,5 +390,26 @@ actor TransferEngine {
 
     private func notifyUpdate(_ task: TransferTask) {
         onUpdate?(task)
+    }
+
+    private func isTaskInProgress(id: UUID) -> Bool {
+        guard let idx = tasks.firstIndex(where: { $0.id == id }),
+              case .inProgress = tasks[idx].status else { return false }
+        return true
+    }
+
+    private func handleCancellation(id: UUID) {
+        if let idx = tasks.firstIndex(where: { $0.id == id }),
+           case .inProgress = tasks[idx].status {
+            tasks[idx].status = .cancelled
+            notifyUpdate(tasks[idx])
+        }
+        finishRunningTaskWithoutStateChange(id: id)
+    }
+
+    private func finishRunningTaskWithoutStateChange(id: UUID) {
+        runningIDs.remove(id)
+        runningTasks.removeValue(forKey: id)
+        drainQueue()
     }
 }

@@ -131,6 +131,73 @@ final class TransferEnginePathTests: XCTestCase {
     }
 }
 
+final class TransferEngineQueueTests: XCTestCase {
+
+    func test_clearUnfinishedReturnsOnlyRemovedUnfinishedTasks() async {
+        let engine = TransferEngine(startsTasksAutomatically: false)
+        let unfinished = makeTask(named: "unfinished")
+        let cancelled = makeTask(named: "cancelled")
+
+        await engine.enqueue(unfinished)
+        await engine.enqueue(cancelled)
+        await engine.cancel(id: cancelled.id)
+
+        let removedIDs = await engine.clearUnfinished()
+        let remaining = await engine.allTasks()
+
+        XCTAssertEqual(removedIDs, Set([unfinished.id]))
+        XCTAssertEqual(Set(remaining.map(\.id)), Set([cancelled.id]))
+        XCTAssertEqual(remaining.first?.status, .cancelled)
+    }
+
+    func test_bulkPauseAndResumeKeepsQueuedTasksControlledBySelection() async {
+        let engine = TransferEngine(startsTasksAutomatically: false)
+        let first = makeTask(named: "first")
+        let second = makeTask(named: "second")
+
+        await engine.enqueue(first)
+        await engine.enqueue(second)
+        await engine.pause(ids: [first.id])
+
+        var tasks = await engine.allTasks()
+        XCTAssertTrue(tasks.contains { $0.id == second.id && $0.status == .queued })
+        guard let paused = tasks.first(where: { $0.id == first.id }) else {
+            XCTFail("Expected paused task")
+            return
+        }
+        XCTAssertEqual(paused.status, .paused(resumeOffset: 0))
+
+        await engine.resume(ids: [first.id])
+
+        tasks = await engine.allTasks()
+        XCTAssertTrue(tasks.allSatisfy { $0.status == .queued })
+    }
+
+    func test_removeReturnsOnlyExistingTaskIDs() async {
+        let engine = TransferEngine(startsTasksAutomatically: false)
+        let task = makeTask(named: "existing")
+        let missingID = UUID()
+
+        await engine.enqueue(task)
+
+        let removedIDs = await engine.remove(ids: [task.id, missingID])
+        let remaining = await engine.allTasks()
+
+        XCTAssertEqual(removedIDs, Set([task.id]))
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    private func makeTask(named name: String) -> TransferTask {
+        TransferTask(
+            serverID: UUID(),
+            serverName: "Test",
+            direction: .upload,
+            localURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(name).dat"),
+            remotePath: "/remote/\(name).dat"
+        )
+    }
+}
+
 // MARK: - TransferProgress Tests
 final class TransferProgressTests: XCTestCase {
 
