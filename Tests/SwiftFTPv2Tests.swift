@@ -386,6 +386,47 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertFalse(persisted.contains("legacy-secret"))
     }
 
+    private struct AlwaysFailingKeychain: KeychainStoring {
+        struct Failure: Error {}
+        func savePassword(_ password: String, for key: String, label: String?) throws {
+            throw Failure()
+        }
+        func getPassword(for key: String) throws -> String? { nil }
+        @discardableResult
+        func deletePassword(for key: String) -> Bool { true }
+    }
+
+    func test_unrelatedWritePreservesLegacyWhenKeychainMigrationFails() async {
+        let failKey = "swiftftp.tests.failkc.\(UUID().uuidString)"
+        let repo = ServerRepository(key: failKey, keychain: AlwaysFailingKeychain())
+        defer { UserDefaults.standard.removeObject(forKey: failKey) }
+
+        let idA = UUID()
+        let idB = UUID()
+        let legacyJSON = """
+        [
+          {"id":"\(idA.uuidString)","displayName":"A","host":"a.local","username":"u","password":"secret-A"},
+          {"id":"\(idB.uuidString)","displayName":"B","host":"b.local","username":"u","password":"secret-B"}
+        ]
+        """
+        UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: failKey)
+
+        // Unrelated write while every Keychain migration write fails.
+        await repo.save(makeCfg("New", password: "new-secret"))
+
+        // Keychain holds nothing, so both pending legacy plaintexts must survive.
+        let a = await repo.password(for: idA)
+        let b = await repo.password(for: idB)
+        XCTAssertEqual(a, "secret-A")
+        XCTAssertEqual(b, "secret-B")
+
+        let persisted = UserDefaults.standard.data(forKey: failKey).flatMap {
+            String(data: $0, encoding: .utf8)
+        } ?? ""
+        XCTAssertTrue(persisted.contains("secret-A"))
+        XCTAssertTrue(persisted.contains("secret-B"))
+    }
+
     func test_sortedByDisplayName() async {
         let b = makeCfg("B-Server")
         let a = makeCfg("A-Server")
