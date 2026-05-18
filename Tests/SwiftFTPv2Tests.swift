@@ -177,9 +177,9 @@ final class KeychainTests: XCTestCase {
         XCTAssertFalse(km.hasPassword(for: key))
     }
 
-    func test_missingKeyReturnsEmpty() throws {
+    func test_missingKeyReturnsNil() throws {
         let result = try km.getPassword(for: "swiftftp.definitely.not.exist.\(UUID())")
-        XCTAssertEqual(result, "")
+        XCTAssertNil(result)
     }
 
     func test_hasPassword_true() throws {
@@ -219,7 +219,8 @@ final class ServerRepositoryTests: XCTestCase {
         let c = makeCfg("Repo Test", password: "secret")
         repo.save(c)
         let fetched = repo.fetchAll().first(where: { $0.id == c.id })
-        XCTAssertEqual(fetched?.password, "secret")
+        XCTAssertEqual(fetched?.password, "")
+        XCTAssertEqual(repo.password(for: c.id), "secret")
         let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
             String(data: $0, encoding: .utf8)
         } ?? ""
@@ -284,7 +285,8 @@ final class ServerRepositoryTests: XCTestCase {
         }
 
         let fetched = repo.fetchAll()
-        XCTAssertEqual(fetched.first?.password, "legacy-secret")
+        XCTAssertEqual(fetched.first?.password, "")
+        XCTAssertEqual(repo.password(for: id), "legacy-secret")
         XCTAssertEqual(try KeychainManager.shared.getPassword(for: id.uuidString), "legacy-secret")
 
         let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {

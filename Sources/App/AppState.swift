@@ -106,7 +106,7 @@ final class AppState: ObservableObject {
             alertItem = AlertItem(title: "试用已结束", message: "请购买 Pro 后保存服务器配置。")
             return
         }
-        repository.save(config)
+        repository.save(config, credentialPolicy: .replace)
         loadServers()
     }
 
@@ -143,8 +143,20 @@ final class AppState: ObservableObject {
         applyTransferConcurrency()
     }
 
-    func updateServer(_ config: ServerConfig) {
-        repository.update(config)
+    func updateServer(_ config: ServerConfig) async {
+        repository.update(config, credentialPolicy: .replaceIfNonEmpty)
+        if !config.password.isEmpty {
+            await ConnectionPoolRegistry.shared.updateCachedPassword(config.password, forServerID: config.id)
+        }
+        loadServers()
+    }
+
+    func clearSavedPasswords() async {
+        let serverIDs = servers.map(\.id)
+        for id in serverIDs {
+            repository.deletePassword(for: id)
+            await ConnectionPoolRegistry.shared.updateCachedPassword("", forServerID: id)
+        }
         loadServers()
     }
 
@@ -220,8 +232,12 @@ final class AppState: ObservableObject {
     func connect(to server: ServerConfig) async {
         connectionStates[server.id] = .connecting
         do {
-            let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
-            let client = try await pool.borrowClient(password: server.password)
+            var connectionConfig = server
+            if connectionConfig.password.isEmpty {
+                connectionConfig.password = repository.password(for: server.id)
+            }
+            let pool = await ConnectionPoolRegistry.shared.pool(for: connectionConfig, maxSize: 5)
+            let client = try await pool.borrowClient(password: connectionConfig.password)
             connectionStates[server.id] = .connected(client: client)
             selectedServerID = server.id
             repository.updateLastConnected(for: server.id, at: Date())

@@ -217,13 +217,14 @@ struct ServerEditView: View {
     // MARK: - Password Field with show/hide toggle
     @ViewBuilder
     func passwordField(placeholder: String) -> some View {
+        let effectivePlaceholder = isEditing ? "留空则保持已保存密码" : placeholder
         HStack(spacing: 6) {
             if showPassword {
-                TextField(placeholder, text: $password)
+                TextField(effectivePlaceholder, text: $password)
                     .textFieldStyle(.roundedBorder)
                     .textContentType(.password)
             } else {
-                SecureField(placeholder, text: $password)
+                SecureField(effectivePlaceholder, text: $password)
                     .textFieldStyle(.roundedBorder)
                     .textContentType(.password)
             }

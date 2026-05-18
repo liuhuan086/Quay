@@ -231,11 +231,7 @@ struct SettingsRootView: View {
                 Text("密码安全保存在 macOS 钥匙串中。")
                     .foregroundColor(.secondary)
                 Button("清除所有保存的密码") {
-                    for i in appState.servers.indices {
-                        var s = appState.servers[i]
-                        s.password = ""
-                        appState.updateServer(s)
-                    }
+                    Task { await appState.clearSavedPasswords() }
                 }.foregroundColor(.red)
             }
             .padding().tabItem { Label("安全", systemImage: "lock.shield") }

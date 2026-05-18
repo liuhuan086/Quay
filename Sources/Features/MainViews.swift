@@ -290,7 +290,7 @@ struct SidebarView: View {
         .background(InitialFirstResponderClearer())
         .sheet(item: $editTarget) { server in
             ServerEditView(config: server, servers: appState.servers) { cfg in
-                appState.updateServer(cfg)
+                Task { await appState.updateServer(cfg) }
             }
         }
         .confirmationDialog("删除服务器", isPresented: Binding(

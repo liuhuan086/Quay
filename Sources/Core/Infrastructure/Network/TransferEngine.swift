@@ -96,14 +96,13 @@ actor TransferEngine {
         tasks[idx] = task
         notifyUpdate(task)
 
-        let password = (try? KeychainManager.shared.getPassword(for: task.serverID.uuidString)) ?? ""
         guard let pool = await ConnectionPoolRegistry.shared.existingPool(forServerID: task.serverID) else {
             markFailed(id: id, message: "连接池不存在，请先连接服务器")
             return
         }
 
         do {
-            let client = try await pool.borrowClient(password: password)
+            let client = try await pool.borrowClient()
 
             let offset = tasks.first(where: { $0.id == id })?.resumeOffset ?? 0
 
