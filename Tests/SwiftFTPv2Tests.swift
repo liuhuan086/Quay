@@ -338,6 +338,54 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertFalse(persisted.contains("secret-two"))
     }
 
+    func test_unrelatedSaveDoesNotDropUnmigratedLegacyPassword() async {
+        let legacyID = UUID()
+        let legacyJSON = """
+        [{
+          "id": "\(legacyID.uuidString)",
+          "displayName": "Legacy",
+          "host": "legacy.local",
+          "username": "u",
+          "password": "legacy-secret"
+        }]
+        """
+        UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: repoKey)
+        defer {
+            KeychainManager.shared.deletePassword(for: legacyID.uuidString)
+        }
+
+        await repo.save(makeCfg("New Server", password: "new-secret"))
+
+        let resolved = await repo.password(for: legacyID)
+        XCTAssertEqual(resolved, "legacy-secret")
+    }
+
+    func test_deletePasswordRemovesLegacyPlaintextPassword() async {
+        let legacyID = UUID()
+        let legacyJSON = """
+        [{
+          "id": "\(legacyID.uuidString)",
+          "displayName": "Legacy",
+          "host": "legacy.local",
+          "username": "u",
+          "password": "legacy-secret"
+        }]
+        """
+        UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: repoKey)
+        defer {
+            KeychainManager.shared.deletePassword(for: legacyID.uuidString)
+        }
+
+        await repo.deletePassword(for: legacyID)
+
+        let resolved = await repo.password(for: legacyID)
+        XCTAssertEqual(resolved, "")
+        let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
+            String(data: $0, encoding: .utf8)
+        } ?? ""
+        XCTAssertFalse(persisted.contains("legacy-secret"))
+    }
+
     func test_sortedByDisplayName() async {
         let b = makeCfg("B-Server")
         let a = makeCfg("A-Server")

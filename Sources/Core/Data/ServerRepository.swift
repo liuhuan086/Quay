@@ -73,10 +73,25 @@ final class ServerRepository: @unchecked Sendable {
         return list
     }
 
-    private static func persist(_ list: [ServerConfig], key: String) {
+    private static func persist(
+        _ list: [ServerConfig],
+        key: String,
+        preservingLegacyPasswordsFrom existing: [ServerConfig] = [],
+        strippingLegacyPasswordFor strippedIDs: Set<UUID> = []
+    ) {
+        var legacyPasswords: [UUID: String] = [:]
+        for config in existing where !config.password.isEmpty {
+            legacyPasswords[config.id] = config.password
+        }
         var sanitized = list
         for i in sanitized.indices {
-            sanitized[i].password = ""
+            if sanitized[i].password.isEmpty,
+               !strippedIDs.contains(sanitized[i].id),
+               let legacyPassword = legacyPasswords[sanitized[i].id] {
+                sanitized[i].password = legacyPassword
+            } else {
+                sanitized[i].password = ""
+            }
         }
         if let data = try? makeEncoder().encode(sanitized) {
             UserDefaults.standard.set(data, forKey: key)
@@ -150,12 +165,20 @@ final class ServerRepository: @unchecked Sendable {
         }
 
         func deletePassword(for id: UUID) {
+            let existing = loadList()
             keychain.deletePassword(for: credentialAccount(for: id))
+            var all = existing
+            if let index = all.firstIndex(where: { $0.id == id }) {
+                all[index].password = ""
+                persist(all, preservingLegacyPasswordsFrom: existing, strippingLegacyPasswordFor: [id])
+            }
         }
 
         func save(_ config: ServerConfig, credentialPolicy: CredentialPolicy) {
+            migrateLegacyPasswordsIfNeeded()
+            let existing = loadList()
             persistCredential(for: config, policy: credentialPolicy)
-            var all = loadList()
+            var all = existing
             var stored = config
             stored.password = ""
             if let index = all.firstIndex(where: { $0.id == config.id }) {
@@ -163,7 +186,11 @@ final class ServerRepository: @unchecked Sendable {
             } else {
                 all.append(stored)
             }
-            persist(all)
+            persist(
+                all,
+                preservingLegacyPasswordsFrom: existing,
+                strippingLegacyPasswordFor: strippedLegacyPasswordIDs(for: config, policy: credentialPolicy)
+            )
         }
 
         func update(_ config: ServerConfig, credentialPolicy: CredentialPolicy) {
@@ -172,39 +199,55 @@ final class ServerRepository: @unchecked Sendable {
 
         @discardableResult
         func updateLastConnected(for id: UUID, at date: Date) -> ServerConfig? {
-            var all = loadList()
+            migrateLegacyPasswordsIfNeeded()
+            let existing = loadList()
+            var all = existing
             guard let index = all.firstIndex(where: { $0.id == id }) else { return nil }
             all[index].lastConnectedAt = date
             let updated = all[index]
-            persist(all)
+            persist(all, preservingLegacyPasswordsFrom: existing)
             return updated
         }
 
         func delete(_ id: UUID) {
+            let existing = loadList()
             keychain.deletePassword(for: credentialAccount(for: id))
-            var all = loadList()
+            var all = existing
             all.removeAll { $0.id == id }
-            persist(all)
+            persist(all, preservingLegacyPasswordsFrom: existing, strippingLegacyPasswordFor: [id])
         }
 
         func importJSON(_ data: Data) throws {
+            migrateLegacyPasswordsIfNeeded()
             let incoming = try ServerRepository.makeDecoder().decode([ServerConfig].self, from: data)
-            var all = loadList()
+            let existing = loadList()
+            var all = existing
+            var strippedIDs: Set<UUID> = []
             for config in incoming where !all.contains(where: { $0.id == config.id }) {
                 persistCredential(for: config, policy: .replace)
                 var stored = config
                 stored.password = ""
                 all.append(stored)
+                strippedIDs.insert(config.id)
             }
-            persist(all)
+            persist(all, preservingLegacyPasswordsFrom: existing, strippingLegacyPasswordFor: strippedIDs)
         }
 
         private func loadList() -> [ServerConfig] {
             ServerRepository.loadList(from: key)
         }
 
-        private func persist(_ list: [ServerConfig]) {
-            ServerRepository.persist(list, key: key)
+        private func persist(
+            _ list: [ServerConfig],
+            preservingLegacyPasswordsFrom existing: [ServerConfig] = [],
+            strippingLegacyPasswordFor strippedIDs: Set<UUID> = []
+        ) {
+            ServerRepository.persist(
+                list,
+                key: key,
+                preservingLegacyPasswordsFrom: existing,
+                strippingLegacyPasswordFor: strippedIDs
+            )
         }
 
         private func persistCredential(for config: ServerConfig, policy: CredentialPolicy) {
@@ -227,6 +270,17 @@ final class ServerRepository: @unchecked Sendable {
 
         private func credentialAccount(for id: UUID) -> String {
             id.uuidString
+        }
+
+        private func strippedLegacyPasswordIDs(for config: ServerConfig, policy: CredentialPolicy) -> Set<UUID> {
+            switch policy {
+            case .preserve:
+                return []
+            case .replaceIfNonEmpty:
+                return config.password.isEmpty ? [] : [config.id]
+            case .replace:
+                return [config.id]
+            }
         }
     }
 }
