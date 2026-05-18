@@ -11,7 +11,7 @@ final class ServerRepository: @unchecked Sendable {
     private let key: String
     private let store: ServerRepositoryStore
 
-    init(key: String = "swiftftp.v2.servers", keychain: KeychainManager = .shared) {
+    init(key: String = "swiftftp.v2.servers", keychain: any KeychainStoring = KeychainManager.shared) {
         self.key = key
         self.store = ServerRepositoryStore(key: key, keychain: keychain)
     }
@@ -79,29 +79,40 @@ final class ServerRepository: @unchecked Sendable {
         preservingLegacyPasswordsFrom existing: [ServerConfig] = [],
         strippingLegacyPasswordFor strippedIDs: Set<UUID> = []
     ) {
-        var legacyPasswords: [UUID: String] = [:]
+        // ServerConfig.encode deliberately omits `password`, so a normal
+        // encode strips every credential from the blob. Re-inject ONLY the
+        // still-unmigrated legacy plaintext — present in the pre-write
+        // snapshot and not explicitly stripped — so a Keychain outage cannot
+        // let an unrelated write destroy the user's only saved copy. No
+        // non-legacy password is ever written: re-injection is driven solely
+        // by `existing`, never by `list`.
+        var pendingLegacy: [String: String] = [:]
         for config in existing where !config.password.isEmpty {
-            legacyPasswords[config.id] = config.password
+            guard !strippedIDs.contains(config.id) else { continue }
+            pendingLegacy[config.id.uuidString] = config.password
         }
-        // A non-empty password in `list` only ever originates from an
-        // unmigrated legacy plaintext copied out of `existing` (every other
-        // path blanks it). Preserve it for any id that still has a pending
-        // legacy credential and is not being explicitly stripped; blank the
-        // rest. The new entry's emptiness must NOT gate this — an untouched
-        // legacy entry carries its plaintext into `list`, and requiring
-        // emptiness would push it into the else branch and destroy the only
-        // remaining copy whenever Keychain migration has not yet succeeded.
-        var sanitized = list
-        for i in sanitized.indices {
-            if !strippedIDs.contains(sanitized[i].id),
-               let legacyPassword = legacyPasswords[sanitized[i].id] {
-                sanitized[i].password = legacyPassword
-            } else {
-                sanitized[i].password = ""
+
+        guard let encoded = try? makeEncoder().encode(list) else { return }
+
+        if pendingLegacy.isEmpty {
+            UserDefaults.standard.set(encoded, forKey: key)
+            return
+        }
+
+        guard var array = (try? JSONSerialization.jsonObject(with: encoded)) as? [[String: Any]] else {
+            UserDefaults.standard.set(encoded, forKey: key)
+            return
+        }
+        for i in array.indices {
+            if let idString = array[i]["id"] as? String,
+               let legacy = pendingLegacy[idString] {
+                array[i]["password"] = legacy
             }
         }
-        if let data = try? makeEncoder().encode(sanitized) {
-            UserDefaults.standard.set(data, forKey: key)
+        if let patched = try? JSONSerialization.data(withJSONObject: array) {
+            UserDefaults.standard.set(patched, forKey: key)
+        } else {
+            UserDefaults.standard.set(encoded, forKey: key)
         }
     }
 
@@ -119,9 +130,9 @@ final class ServerRepository: @unchecked Sendable {
 
     private actor ServerRepositoryStore {
         private let key: String
-        private let keychain: KeychainManager
+        private let keychain: any KeychainStoring
 
-        init(key: String, keychain: KeychainManager) {
+        init(key: String, keychain: any KeychainStoring) {
             self.key = key
             self.keychain = keychain
         }

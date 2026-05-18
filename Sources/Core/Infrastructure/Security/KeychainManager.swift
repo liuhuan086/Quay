@@ -2,7 +2,15 @@
 import Foundation
 import Security
 
-public final class KeychainManager: Sendable {
+// Seam for injecting an alternate (or deliberately failing) Keychain in tests.
+public protocol KeychainStoring: Sendable {
+    func savePassword(_ password: String, for key: String, label: String?) throws
+    func getPassword(for key: String) throws -> String?
+    @discardableResult
+    func deletePassword(for key: String) -> Bool
+}
+
+public final class KeychainManager: KeychainStoring {
     public static let shared = KeychainManager()
     private let service = "com.swiftftp.app"
     private init() {}
