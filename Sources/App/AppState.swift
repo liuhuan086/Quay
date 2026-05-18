@@ -169,15 +169,22 @@ final class AppState: ObservableObject {
     }
 
     func clearSavedPasswords() async {
+        // Best-effort across every server: a single Keychain failure must not
+        // leave the rest of the saved passwords on disk. Clear what we can,
+        // drop every pool's cached credential, then surface the first failure.
         let serverIDs = servers.map(\.id)
-        do {
-            for id in serverIDs {
+        var firstError: Error?
+        for id in serverIDs {
+            do {
                 try await repository.deletePassword(for: id)
-                await ConnectionPoolRegistry.shared.updateCachedPassword("", forServerID: id)
+            } catch {
+                if firstError == nil { firstError = error }
             }
-            loadServers()
-        } catch {
-            showError(error)
+            await ConnectionPoolRegistry.shared.updateCachedPassword("", forServerID: id)
+        }
+        loadServers()
+        if let firstError {
+            showError(firstError)
         }
     }
 
