@@ -190,17 +190,18 @@ final class AppState: ObservableObject {
 
     func deleteServer(_ config: ServerConfig) async {
         await ConnectionPoolRegistry.shared.removePool(for: config.id)
-        do {
-            try await repository.delete(config.id)
-        } catch {
-            showError(error)
-            return
-        }
+        let credentialCleared = await repository.delete(config.id)
         connectionStates.removeValue(forKey: config.id)
         syncWatchers = syncWatchers.filter { $0.value.serverID != config.id }
         persistSyncWatchers()
         loadServers()
         if selectedServerID == config.id { selectedServerID = nil }
+        if !credentialCleared {
+            alertItem = AlertItem(
+                title: "服务器已删除",
+                message: "已移除该服务器，但保存在 Keychain 中的密码未能清除。该残留项以唯一 ID 标识、不会再被使用，可在“钥匙串访问”中手动删除。"
+            )
+        }
     }
 
     // MARK: - Sync Watchers

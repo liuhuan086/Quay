@@ -207,7 +207,7 @@ final class ServerRepositoryTests: XCTestCase {
 
     override func tearDown() async throws {
         for server in repo.fetchAll() {
-            try await repo.delete(server.id)
+            await repo.delete(server.id)
         }
         UserDefaults.standard.removeObject(forKey: repoKey)
         repo = nil
@@ -255,7 +255,7 @@ final class ServerRepositoryTests: XCTestCase {
     func test_delete() async throws {
         let c = makeCfg("Delete Test")
         try await repo.save(c)
-        try await repo.delete(c.id)
+        await repo.delete(c.id)
         XCTAssertFalse(repo.fetchAll().contains(where: { $0.id == c.id }))
     }
 
@@ -264,7 +264,7 @@ final class ServerRepositoryTests: XCTestCase {
         try await repo.save(c)
         let data = try repo.exportJSON()
         XCTAssertFalse(data.isEmpty)
-        try await repo.delete(c.id)
+        await repo.delete(c.id)
         try await repo.importJSON(data)
         XCTAssertTrue(repo.fetchAll().contains(where: { $0.id == c.id }))
     }
@@ -396,6 +396,13 @@ final class ServerRepositoryTests: XCTestCase {
         func deletePassword(for key: String) -> Bool { true }
     }
 
+    private struct DeleteFailingKeychain: KeychainStoring {
+        func savePassword(_ password: String, for key: String, label: String?) throws {}
+        func getPassword(for key: String) throws -> String? { nil }
+        @discardableResult
+        func deletePassword(for key: String) -> Bool { false }
+    }
+
     func test_unrelatedWritePreservesLegacyWhenKeychainMigrationFails() async throws {
         let failKey = "swiftftp.tests.failkc.\(UUID().uuidString)"
         let repo = ServerRepository(key: failKey, keychain: AlwaysFailingKeychain())
@@ -444,6 +451,24 @@ final class ServerRepositoryTests: XCTestCase {
             String(data: $0, encoding: .utf8)
         } ?? ""
         XCTAssertFalse(persisted.contains("new-secret"))
+    }
+
+    func test_deleteRemovesServerEvenWhenKeychainScrubFails() async {
+        let failKey = "swiftftp.tests.faildel.\(UUID().uuidString)"
+        let repo = ServerRepository(key: failKey, keychain: DeleteFailingKeychain())
+        defer { UserDefaults.standard.removeObject(forKey: failKey) }
+
+        let id = UUID()
+        let json = """
+        [{"id":"\(id.uuidString)","displayName":"S","host":"s.local","username":"u"}]
+        """
+        UserDefaults.standard.set(Data(json.utf8), forKey: failKey)
+
+        let credentialCleared = await repo.delete(id)
+
+        // Server removal always succeeds; only the Keychain scrub failed.
+        XCTAssertFalse(credentialCleared)
+        XCTAssertFalse(repo.fetchAll().contains(where: { $0.id == id }))
     }
 
     func test_sortedByDisplayName() async throws {
@@ -682,7 +707,7 @@ final class PerformanceTests: XCTestCase {
         }
         for c in configs { try await repo.save(c) }
         measure { _ = repo.fetchAll() }
-        for c in configs { try await repo.delete(c.id) }
+        for c in configs { await repo.delete(c.id) }
         UserDefaults.standard.removeObject(forKey: key)
     }
 }
