@@ -255,3 +255,24 @@ Acceptance:
 - The report sheet can inspect every issue in the drift report.
 - Filtering is backed by unit-tested report grouping.
 - Remote extra and remote newer items remain visible even when they are not automatically repairable.
+
+## Step 12: Stale Mirror Trash Cleanup
+
+Status:
+
+- Mirror quarantine deletes can trigger stale trash cleanup after the destructive marker/canary checks have already passed.
+- Cleanup only considers `.swiftftp-trash/<rule-id>/` timestamp directories for the same sync rule.
+- Default policy keeps trash for 30 days, runs at most once every 6 hours per rule, and deletes at most 20 timestamp folders per pass.
+- Recursive deletion validates every path against both the managed mirror root and the selected trash timestamp folder.
+
+Scope:
+
+- Keep cleanup automatic and conservative; do not add a broad user-facing "empty remote trash" button.
+- Ignore non-timestamp names, files, recent folders, and paths outside the rule's trash namespace.
+- Cleanup failure must not turn a successful mirror quarantine into a failed sync operation.
+
+Acceptance:
+
+- Unit tests cover timestamp parsing, retention, cap ordering, cadence, and timestamp-root containment.
+- Cleanup cannot permanently delete normal remote files outside SwiftFTP's rule-specific trash folders.
+- Mirror delete behavior remains source-authoritative: A deletes may quarantine B, B changes never delete A.

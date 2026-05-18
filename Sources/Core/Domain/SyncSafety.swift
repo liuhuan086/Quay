@@ -1198,6 +1198,14 @@ public enum ManagedMirrorRoot {
         join(remoteRoot: remoteRoot, child: markerFileName)
     }
 
+    public static func trashRootPath(remoteRoot: String) -> String {
+        join(remoteRoot: remoteRoot, child: trashDirectoryName)
+    }
+
+    public static func trashRulePath(remoteRoot: String, ruleID: UUID) -> String {
+        join(remoteRoot: trashRootPath(remoteRoot: remoteRoot), child: ruleID.uuidString)
+    }
+
     public static func canaryTemporaryPath(remoteRoot: String, ruleID: UUID) -> String {
         join(remoteRoot: remoteRoot, child: "\(canaryPrefix)\(ruleID.uuidString).tmp")
     }
@@ -1223,8 +1231,8 @@ public enum ManagedMirrorRoot {
             remoteRoot: remoteRoot
         )
         let trashRoot = join(
-            remoteRoot: remoteRoot,
-            child: "\(trashDirectoryName)/\(ruleID.uuidString)/\(timestampFolder(timestamp))"
+            remoteRoot: trashRulePath(remoteRoot: remoteRoot, ruleID: ruleID),
+            child: trashTimestampFolder(timestamp)
         )
         guard !relativePath.isEmpty else { return trashRoot }
         return join(remoteRoot: trashRoot, child: relativePath)
@@ -1273,6 +1281,28 @@ public enum ManagedMirrorRoot {
         }
     }
 
+    public static func validateTrashCleanupTarget(
+        _ remotePath: String,
+        timestampRoot: String,
+        for marker: ManagedMirrorRootMarker
+    ) throws {
+        try validateDestructiveTarget(remotePath, for: marker)
+        guard contains(remotePath, inRemoteRoot: timestampRoot) else {
+            throw ManagedMirrorRootError.destructivePathOutsideManagedRoot(
+                path: SyncPathValidator.canonicalRemotePath(remotePath),
+                root: SyncPathValidator.canonicalRemotePath(timestampRoot)
+            )
+        }
+    }
+
+    public static func trashTimestampFolder(_ date: Date) -> String {
+        timestampFormatter().string(from: date)
+    }
+
+    public static func trashTimestampDate(from folderName: String) -> Date? {
+        timestampFormatter().date(from: folderName)
+    }
+
     public static func contains(_ remotePath: String, inRemoteRoot remoteRoot: String) -> Bool {
         let root = SyncPathValidator.canonicalRemotePath(remoteRoot)
         let path = SyncPathValidator.canonicalRemotePath(remotePath)
@@ -1313,13 +1343,57 @@ public enum ManagedMirrorRoot {
             .map(String.init)
     }
 
-    private static func timestampFolder(_ date: Date) -> String {
+    private static func timestampFormatter() -> DateFormatter {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyyMMdd'T'HHmmss.SSS'Z'"
-        return formatter.string(from: date)
+        formatter.isLenient = false
+        return formatter
+    }
+}
+
+public struct ManagedMirrorTrashCleanupCandidate: Equatable, Sendable {
+    public var path: String
+    public var timestamp: Date
+
+    public init(path: String, timestamp: Date) {
+        self.path = path
+        self.timestamp = timestamp
+    }
+}
+
+public enum ManagedMirrorTrashCleanupPolicy {
+    public static let retention: TimeInterval = 30 * 24 * 60 * 60
+    public static let minimumRunInterval: TimeInterval = 6 * 60 * 60
+    public static let maxTimestampFoldersPerRun = 20
+
+    public static func isDue(lastRun: Date?, now: Date = Date()) -> Bool {
+        guard let lastRun else { return true }
+        return now.timeIntervalSince(lastRun) >= minimumRunInterval
+    }
+
+    public static func cleanupCandidates(
+        from items: [RemoteFileItem],
+        now: Date = Date(),
+        retention: TimeInterval = retention,
+        maxCount: Int = maxTimestampFoldersPerRun
+    ) -> [ManagedMirrorTrashCleanupCandidate] {
+        let cutoff = now.addingTimeInterval(-retention)
+        return items.compactMap { item -> ManagedMirrorTrashCleanupCandidate? in
+            guard item.isDirectory,
+                  let timestamp = ManagedMirrorRoot.trashTimestampDate(from: item.name),
+                  timestamp < cutoff else {
+                return nil
+            }
+            return ManagedMirrorTrashCleanupCandidate(path: item.path, timestamp: timestamp)
+        }
+        .sorted { lhs, rhs in
+            lhs.timestamp == rhs.timestamp ? lhs.path < rhs.path : lhs.timestamp < rhs.timestamp
+        }
+        .prefix(max(0, maxCount))
+        .map { $0 }
     }
 }
 

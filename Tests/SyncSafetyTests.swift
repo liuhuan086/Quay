@@ -786,6 +786,29 @@ final class ManagedMirrorRootTests: XCTestCase {
         )
     }
 
+    func test_trashCleanupTargetMustStayInsideTimestampFolder() throws {
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
+        let watcher = mirrorWatcher(id: id, remotePath: "/Users/liuhuan/Downloads/docs")
+        let marker = ManagedMirrorRoot.marker(for: watcher, appVersion: "2.0.0")
+        let timestampRoot = try ManagedMirrorRoot.trashPath(
+            remoteRoot: watcher.remotePath,
+            ruleID: id,
+            targetRemotePath: watcher.remotePath,
+            timestamp: Date(timeIntervalSince1970: 0)
+        )
+
+        XCTAssertNoThrow(try ManagedMirrorRoot.validateTrashCleanupTarget(
+            "\(timestampRoot)/Sources/Main.swift",
+            timestampRoot: timestampRoot,
+            for: marker
+        ))
+        XCTAssertThrowsError(try ManagedMirrorRoot.validateTrashCleanupTarget(
+            "/Users/liuhuan/Downloads/docs/Sources/Main.swift",
+            timestampRoot: timestampRoot,
+            for: marker
+        ))
+    }
+
     private func mirrorWatcher(
         id: UUID = UUID(),
         remotePath: String
@@ -805,6 +828,94 @@ final class ManagedMirrorRootTests: XCTestCase {
             lastSyncAt: nil,
             totalSynced: 0
         )
+    }
+}
+
+final class ManagedMirrorTrashCleanupPolicyTests: XCTestCase {
+
+    func test_cleanupCandidatesOnlyIncludeExpiredTimestampDirectories() {
+        let now = Date(timeIntervalSince1970: 40 * 24 * 60 * 60)
+        let expired = Date(timeIntervalSince1970: 0)
+        let boundary = now.addingTimeInterval(-ManagedMirrorTrashCleanupPolicy.retention)
+        let recent = now.addingTimeInterval(-ManagedMirrorTrashCleanupPolicy.retention + 1)
+        let root = "/Users/liuhuan/Downloads/docs/.swiftftp-trash/rule"
+
+        let candidates = ManagedMirrorTrashCleanupPolicy.cleanupCandidates(
+            from: [
+                RemoteFileItem(
+                    name: ManagedMirrorRoot.trashTimestampFolder(expired),
+                    path: "\(root)/\(ManagedMirrorRoot.trashTimestampFolder(expired))",
+                    isDirectory: true
+                ),
+                RemoteFileItem(
+                    name: ManagedMirrorRoot.trashTimestampFolder(boundary),
+                    path: "\(root)/\(ManagedMirrorRoot.trashTimestampFolder(boundary))",
+                    isDirectory: true
+                ),
+                RemoteFileItem(
+                    name: ManagedMirrorRoot.trashTimestampFolder(recent),
+                    path: "\(root)/\(ManagedMirrorRoot.trashTimestampFolder(recent))",
+                    isDirectory: true
+                ),
+                RemoteFileItem(name: "not-a-trash-folder", path: "\(root)/not-a-trash-folder", isDirectory: true),
+                RemoteFileItem(
+                    name: ManagedMirrorRoot.trashTimestampFolder(expired),
+                    path: "\(root)/file",
+                    isDirectory: false
+                )
+            ],
+            now: now
+        )
+
+        XCTAssertEqual(candidates, [
+            ManagedMirrorTrashCleanupCandidate(
+                path: "\(root)/\(ManagedMirrorRoot.trashTimestampFolder(expired))",
+                timestamp: expired
+            )
+        ])
+    }
+
+    func test_cleanupCandidatesAreOldestFirstAndCapped() {
+        let now = Date(timeIntervalSince1970: 100 * 24 * 60 * 60)
+        let root = "/Users/liuhuan/Downloads/docs/.swiftftp-trash/rule"
+        let newest = Date(timeIntervalSince1970: 20)
+        let middle = Date(timeIntervalSince1970: 10)
+        let oldest = Date(timeIntervalSince1970: 0)
+        let items = [newest, oldest, middle].map { date in
+            RemoteFileItem(
+                name: ManagedMirrorRoot.trashTimestampFolder(date),
+                path: "\(root)/\(ManagedMirrorRoot.trashTimestampFolder(date))",
+                isDirectory: true
+            )
+        }
+
+        XCTAssertEqual(
+            ManagedMirrorTrashCleanupPolicy.cleanupCandidates(from: items, now: now, maxCount: 2),
+            [
+                ManagedMirrorTrashCleanupCandidate(
+                    path: "\(root)/\(ManagedMirrorRoot.trashTimestampFolder(oldest))",
+                    timestamp: oldest
+                ),
+                ManagedMirrorTrashCleanupCandidate(
+                    path: "\(root)/\(ManagedMirrorRoot.trashTimestampFolder(middle))",
+                    timestamp: middle
+                )
+            ]
+        )
+    }
+
+    func test_cleanupRunCadence() {
+        let now = Date(timeIntervalSince1970: 10_000)
+
+        XCTAssertTrue(ManagedMirrorTrashCleanupPolicy.isDue(lastRun: nil, now: now))
+        XCTAssertFalse(ManagedMirrorTrashCleanupPolicy.isDue(
+            lastRun: now.addingTimeInterval(-ManagedMirrorTrashCleanupPolicy.minimumRunInterval + 1),
+            now: now
+        ))
+        XCTAssertTrue(ManagedMirrorTrashCleanupPolicy.isDue(
+            lastRun: now.addingTimeInterval(-ManagedMirrorTrashCleanupPolicy.minimumRunInterval),
+            now: now
+        ))
     }
 }
 

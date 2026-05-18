@@ -23,7 +23,7 @@ Most of this document is the **target** model. Track what is actually shipped he
 
 **Drift detail browsing shipped through Step 11:** remote drift reports now include a categorized detail list for all drift, local uploads needed, remote missing, remote extra, remote older, remote newer, and conflicts. The repair flow is still explicit and remote-only.
 
-**Not yet implemented (still target-only):** stale-trash cleanup. The Acceptance Criteria section is the gate for that future phase.
+**Stale mirror trash cleanup shipped through Step 12:** after a mirror delete has successfully passed marker/canary validation and moved a target into `.swiftftp-trash`, SwiftFTP may clean old trash timestamp folders for the same rule. Cleanup is throttled, retention-based, capped per run, and recursively validates every deleted path against both the managed mirror root and the selected trash timestamp folder.
 
 **Additional shipped guardrail:** upload tasks now write to `<filename>.__swiftftp_tmp__` and rename into place on success. SwiftFTP temp files are ignored by watchers, local/remote snapshots, and default excludes. Stale-temp cleanup is intentionally not enabled until managed-root scoping exists.
 
@@ -204,6 +204,8 @@ Deletion sync must be conservative:
 - Prefer moving remote deletes to `.swiftftp-trash/<rule-id>/<timestamp>/...` when the protocol and permissions allow it.
 - If permanent delete is the only available behavior, the user must have enabled mirror deletion explicitly.
 - If remote delete fails, pause or mark the rule as failed instead of continuing silently.
+- Stale trash cleanup may permanently delete only SwiftFTP-created timestamp folders under `.swiftftp-trash/<rule-id>/`, never arbitrary paths under the remote root.
+- Trash cleanup must use a retention window, a per-run cap, and timestamp-folder parsing. Invalid folder names, files, and recent trash folders are ignored.
 
 Add a managed-root marker for destructive mirror rules:
 

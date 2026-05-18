@@ -57,6 +57,7 @@ final class AppState: ObservableObject {
     private let hasSeenOnboardingKey = "hasSeenOnboarding"
     private let trialStartedAtKey = "trialStartedAt"
     private let trialLength: TimeInterval = 7 * 24 * 60 * 60
+    private var managedMirrorTrashCleanupRuns: [UUID: Date] = [:]
 
     // Transfer engine (actor)
     let engine = TransferEngine()
@@ -403,15 +404,149 @@ final class AppState: ObservableObject {
             )
             try ManagedMirrorRoot.validateDestructiveTarget(trashPath, for: marker)
             await ensureRemoteParentDirectories(for: trashPath, using: client)
+            let resolvedPath: String
             do {
                 try await client.rename(from: targetRemotePath, to: trashPath)
+                resolvedPath = trashPath
             } catch where Self.isRemoteMissingPathError(error) {
-                return targetRemotePath
+                resolvedPath = targetRemotePath
             }
-            return trashPath
+            await cleanupStaleManagedMirrorTrashIfDue(
+                watcher: watcher,
+                marker: marker,
+                using: client
+            )
+            return resolvedPath
         } catch {
             pauseMirrorWatcher(watcher, reason: error)
             return nil
+        }
+    }
+
+    @discardableResult
+    func cleanupStaleManagedMirrorTrash(
+        server: ServerConfig,
+        watcher: SyncWatcher,
+        now: Date = Date(),
+        force: Bool = false
+    ) async -> Int {
+        do {
+            let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+            let client = try await pool.borrowClient(password: server.password)
+            defer { Task { await pool.returnClient(client) } }
+
+            let marker = try await readManagedMirrorRootMarker(
+                remoteRoot: watcher.remotePath,
+                using: client
+            )
+            try ManagedMirrorRoot.validate(marker: marker, for: watcher)
+            return await cleanupStaleManagedMirrorTrashIfDue(
+                watcher: watcher,
+                marker: marker,
+                using: client,
+                now: now,
+                force: force
+            )
+        } catch {
+            return 0
+        }
+    }
+
+    private func cleanupStaleManagedMirrorTrashIfDue(
+        watcher: SyncWatcher,
+        marker: ManagedMirrorRootMarker,
+        using client: any AnyFTPClient,
+        now: Date = Date(),
+        force: Bool = false
+    ) async -> Int {
+        guard force || ManagedMirrorTrashCleanupPolicy.isDue(
+            lastRun: managedMirrorTrashCleanupRuns[watcher.id],
+            now: now
+        ) else {
+            return 0
+        }
+        managedMirrorTrashCleanupRuns[watcher.id] = now
+        do {
+            return try await deleteStaleManagedMirrorTrash(
+                watcher: watcher,
+                marker: marker,
+                using: client,
+                now: now
+            )
+        } catch {
+            return 0
+        }
+    }
+
+    private func deleteStaleManagedMirrorTrash(
+        watcher: SyncWatcher,
+        marker: ManagedMirrorRootMarker,
+        using client: any AnyFTPClient,
+        now: Date
+    ) async throws -> Int {
+        let ruleTrashPath = ManagedMirrorRoot.trashRulePath(
+            remoteRoot: watcher.remotePath,
+            ruleID: watcher.id
+        )
+        let items: [RemoteFileItem]
+        do {
+            items = try await client.listDirectory(ruleTrashPath)
+        } catch where Self.isRemoteMissingDirectoryError(error) {
+            return 0
+        }
+
+        let candidates = ManagedMirrorTrashCleanupPolicy.cleanupCandidates(from: items, now: now)
+        var deleted = 0
+        for candidate in candidates {
+            do {
+                try ManagedMirrorRoot.validateTrashCleanupTarget(
+                    candidate.path,
+                    timestampRoot: ruleTrashPath,
+                    for: marker
+                )
+                try await deleteRemoteTree(
+                    path: candidate.path,
+                    isDirectory: true,
+                    timestampRoot: candidate.path,
+                    marker: marker,
+                    using: client
+                )
+                deleted += 1
+            } catch {
+                continue
+            }
+        }
+        return deleted
+    }
+
+    private func deleteRemoteTree(
+        path: String,
+        isDirectory: Bool,
+        timestampRoot: String,
+        marker: ManagedMirrorRootMarker,
+        using client: any AnyFTPClient
+    ) async throws {
+        try ManagedMirrorRoot.validateTrashCleanupTarget(path, timestampRoot: timestampRoot, for: marker)
+        if isDirectory {
+            let children: [RemoteFileItem]
+            do {
+                children = try await client.listDirectory(path)
+            } catch where Self.isRemoteMissingDirectoryError(error) {
+                return
+            }
+            for child in children where child.name != "." && child.name != ".." {
+                try await deleteRemoteTree(
+                    path: child.path,
+                    isDirectory: child.isDirectory,
+                    timestampRoot: timestampRoot,
+                    marker: marker,
+                    using: client
+                )
+            }
+        }
+        do {
+            try await client.delete(path: path, isDirectory: isDirectory)
+        } catch where Self.isRemoteMissingPathError(error) {
         }
     }
 
