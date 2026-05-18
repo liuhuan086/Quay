@@ -458,7 +458,7 @@ struct FileBrowserView: View {
             panel.message = "选择要上传的文件或文件夹"
             panel.begin { response in
                 guard response == .OK else { return }
-                uploadLocalURLs(panel.urls)
+                uploadLocalURLs(panel.urls.map(resolveSecurityScopedURL))
             }
         } else {
             uploadLocalItems(selected)
@@ -466,7 +466,7 @@ struct FileBrowserView: View {
     }
 
     private func uploadLocalItems(_ items: [LocalFileItem]) {
-        uploadLocalURLs(items.map(\.url))
+        uploadLocalURLs(items.map { resolveSecurityScopedURL($0.url) })
     }
 
     private func uploadLocalURLs(_ urls: [URL]) {
@@ -1254,6 +1254,27 @@ private struct FileDropContainer<Content: View>: NSViewRepresentable {
     }
 }
 
+/// Captures a security-scoped bookmark while access is still valid (panel
+/// selection / live drop) and resolves a stable URL that
+/// `startAccessingSecurityScopedResource()` honors for deferred, queued
+/// transfers. Falls back to the original URL if bookmarking is unavailable.
+fileprivate func resolveSecurityScopedURL(_ url: URL) -> URL {
+    let accessing = url.startAccessingSecurityScopedResource()
+    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+    do {
+        let bookmark = try url.bookmarkData(options: [.withSecurityScope])
+        var isStale = false
+        return try URL(
+            resolvingBookmarkData: bookmark,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        )
+    } catch {
+        return url
+    }
+}
+
 private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
     var onDrop: ([URL]) -> Void
 
@@ -1280,7 +1301,9 @@ private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let urls = Self.fileURLs(from: sender)
         guard !urls.isEmpty else { return false }
-        onDrop(urls)
+        // Bookmark synchronously here, while the drag's sandbox extension
+        // is still valid; the actual upload runs later off the queue.
+        onDrop(urls.map(resolveSecurityScopedURL))
         return true
     }
 
