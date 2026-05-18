@@ -530,7 +530,9 @@ struct FileBrowserView: View {
                     cache: cache,
                     securityScopedURL: securityScopedURL
                 )
-                appState.finishTransferBatch(id: batchID, expectedFileCount: result.fileCount)
+                // Batch is marked prepared only at commit (after its tasks
+                // are enqueued); finishing it here would let an unrelated
+                // clear/remove prune it while the conflict sheet is open.
                 plan.merge(result.plan)
             } else {
                 let request = TransferRequest(
@@ -711,7 +713,7 @@ struct FileBrowserView: View {
                     destinationParentURL: destinationParentURL,
                     batchID: batchID
                 )
-                appState.finishTransferBatch(id: batchID, expectedFileCount: result.fileCount)
+                // Prepared only at commit (after enqueue) — see upload path.
                 plan.merge(result.plan)
             }
         } else {
@@ -811,7 +813,6 @@ struct FileBrowserView: View {
         await prepareDirectories(plan.directories)
 
         let acceptedRequests = plan.ready + (includingConflicts ? plan.conflicts : [])
-        updateBatchExpectedCounts(for: plan, acceptedRequests: acceptedRequests)
         for request in acceptedRequests {
             await appState.enqueue(
                 server: server,
@@ -823,6 +824,9 @@ struct FileBrowserView: View {
                 securityScopedURL: request.securityScopedURL
             )
         }
+        // Mark batches prepared only now that their tasks exist, so an
+        // interleaved clear/remove can never prune an in-flight batch.
+        updateBatchExpectedCounts(for: plan, acceptedRequests: acceptedRequests)
 
         if !includingConflicts {
             appState.discardEmptyTransferBatches(ids: plan.conflictBatchIDs)
