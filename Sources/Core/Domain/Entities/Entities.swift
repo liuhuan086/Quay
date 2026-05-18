@@ -222,6 +222,56 @@ public enum TransferStatus: Sendable, Equatable {
         if case .completed = self { return 1.0 }
         return 0
     }
+
+    public var isCompletedOrCancelled: Bool {
+        switch self {
+        case .completed, .cancelled:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var isUnfinished: Bool {
+        !isCompletedOrCancelled
+    }
+}
+
+public struct TransferBatch: Identifiable, Sendable {
+    public let id: UUID
+    public let serverID: UUID
+    public let serverName: String
+    public let direction: TransferDirection
+    public let name: String
+    public let localRootURL: URL
+    public let remoteRootPath: String
+    public let createdAt: Date
+    public var expectedFileCount: Int
+    public var isPrepared: Bool
+
+    public init(
+        id: UUID = UUID(),
+        serverID: UUID,
+        serverName: String,
+        direction: TransferDirection,
+        name: String,
+        localRootURL: URL,
+        remoteRootPath: String,
+        expectedFileCount: Int = 0,
+        isPrepared: Bool = false,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.serverID = serverID
+        self.serverName = serverName
+        self.direction = direction
+        self.name = name
+        self.localRootURL = localRootURL
+        self.remoteRootPath = remoteRootPath
+        self.expectedFileCount = expectedFileCount
+        self.isPrepared = isPrepared
+        self.createdAt = createdAt
+    }
 }
 
 public struct TransferTask: Identifiable, Sendable {
@@ -239,6 +289,7 @@ public struct TransferTask: Identifiable, Sendable {
     public var completedAt: Date?
     public var isAutoSync: Bool
     public var retryCount: Int
+    public var batchID: UUID?
     public static let maxRetries = 3
 
     public var fileName: String { localURL.lastPathComponent }
@@ -259,7 +310,8 @@ public struct TransferTask: Identifiable, Sendable {
     }
 
     public init(serverID: UUID, serverName: String, direction: TransferDirection,
-                localURL: URL, remotePath: String, fileSize: Int64 = 0, isAutoSync: Bool = false) {
+                localURL: URL, remotePath: String, fileSize: Int64 = 0,
+                isAutoSync: Bool = false, batchID: UUID? = nil) {
         self.id              = UUID()
         self.serverID        = serverID
         self.serverName      = serverName
@@ -272,6 +324,7 @@ public struct TransferTask: Identifiable, Sendable {
         self.resumeOffset    = 0
         self.isAutoSync      = isAutoSync
         self.retryCount      = 0
+        self.batchID         = batchID
     }
 }
 
