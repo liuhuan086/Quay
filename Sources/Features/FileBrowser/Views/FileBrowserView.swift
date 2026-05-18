@@ -28,16 +28,54 @@ struct FileBrowserView: View {
     @State private var showRenameRemote: RemoteFileItem?
     @State private var showSyncView = false
     @State private var newName = ""
-    @State private var pendingOverwriteFiles: [OverwriteRequest] = []
+    @State private var pendingTransferPlan: TransferPlan?
     @State private var showOverwriteConfirm = false
     @State private var compactPane: BrowserPane = .local
 
-    struct OverwriteRequest: Identifiable {
+    struct TransferRequest: Identifiable {
         let id = UUID()
         let localURL: URL
         let remotePath: String
         let direction: TransferDirection
         let fileName: String
+        let fileSize: Int64?
+        let batchID: UUID?
+    }
+
+    struct DirectoryPreparation {
+        let localURL: URL?
+        let remotePath: String?
+        let batchID: UUID?
+    }
+
+    struct TransferPlan {
+        var ready: [TransferRequest] = []
+        var conflicts: [TransferRequest] = []
+        var directories: [DirectoryPreparation] = []
+        var blockedMessages: [String] = []
+
+        var allBatchIDs: Set<UUID> {
+            Set(
+                ready.compactMap(\.batchID) +
+                conflicts.compactMap(\.batchID) +
+                directories.compactMap(\.batchID)
+            )
+        }
+
+        var conflictBatchIDs: Set<UUID> {
+            Set(conflicts.compactMap(\.batchID))
+        }
+
+        var hasWork: Bool {
+            !ready.isEmpty || !conflicts.isEmpty || !directories.isEmpty
+        }
+
+        mutating func merge(_ other: TransferPlan) {
+            ready.append(contentsOf: other.ready)
+            conflicts.append(contentsOf: other.conflicts)
+            directories.append(contentsOf: other.directories)
+            blockedMessages.append(contentsOf: other.blockedMessages)
+        }
     }
 
     init(appState: AppState, server: ServerConfig, primaryClient: any AnyFTPClient) {
@@ -114,20 +152,27 @@ struct FileBrowserView: View {
         }
         .alert("文件已存在", isPresented: $showOverwriteConfirm) {
             Button("全部覆盖") {
-                for req in pendingOverwriteFiles {
-                    Task {
-                        await appState.enqueue(server: server, direction: req.direction,
-                                               localURL: req.localURL, remotePath: req.remotePath)
-                    }
+                guard let plan = pendingTransferPlan else { return }
+                Task { @MainActor in
+                    await commitTransferPlan(plan, includingConflicts: true)
+                    pendingTransferPlan = nil
                 }
-                pendingOverwriteFiles.removeAll()
             }
-            Button("取消", role: .cancel) {
-                pendingOverwriteFiles.removeAll()
+            Button("跳过同名") {
+                guard let plan = pendingTransferPlan else { return }
+                Task { @MainActor in
+                    await commitTransferPlan(plan, includingConflicts: false)
+                    pendingTransferPlan = nil
+                }
+            }
+            Button("停止", role: .cancel) {
+                if let plan = pendingTransferPlan {
+                    discardPendingTransferPlan(plan)
+                }
+                pendingTransferPlan = nil
             }
         } message: {
-            let names = pendingOverwriteFiles.map(\.fileName).joined(separator: "\n")
-            Text("以下文件已存在，是否覆盖？\n\(names)")
+            Text(overwriteMessage)
         }
     }
 
@@ -164,6 +209,8 @@ struct FileBrowserView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+
+            compactDestinationBar(for: compactPane)
 
             Divider()
 
@@ -223,7 +270,7 @@ struct FileBrowserView: View {
         ) {
             FileDropContainer(onDrop: handleUploadDrop) {
                 RemoteFileList(vm: remoteVM,
-                               onDownload: { downloadSelected() },
+                               onDownload: { downloadRemoteItems($0) },
                                onDelete: { Task { await remoteVM.deleteSelected() } },
                                onRename: { item in showRenameRemote = item })
             }
@@ -339,17 +386,67 @@ struct FileBrowserView: View {
         .help(help)
     }
 
+    private func compactDestinationBar(for pane: BrowserPane) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: pane == .local ? "arrow.up.right" : "arrow.down.left")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(pane == .local ? "上传到" : "下载到")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(pane == .local ? remoteVM.currentPath : localVM.currentPath)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            if pane == .local {
+                Button {
+                    compactPane = .remote
+                } label: {
+                    Image(systemName: "folder")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help("切换到远程目录")
+            } else {
+                Button {
+                    localVM.requestDirectoryAccess()
+                } label: {
+                    Image(systemName: "folder.badge.gearshape")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help("选择本地下载目录")
+                Button {
+                    compactPane = .local
+                } label: {
+                    Image(systemName: "desktopcomputer")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help("切换到本地目录")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .background(Color(NSColor.windowBackgroundColor).opacity(0.72))
+    }
+
     private func applyShowHidden(_ value: Bool) {
         localVM.showHidden = value
         remoteVM.showHidden = value
     }
 
-    // MARK: - Upload drop handler
+    // MARK: - Unified transfer planning
     private func handleUploadDrop(_ urls: [URL]) {
         uploadLocalURLs(urls)
     }
 
-    // MARK: - Upload selected (local → remote)
     private func uploadSelected() {
         let selected = localVM.sortedItems.filter { localVM.selectedIDs.contains($0.id) }
         if selected.isEmpty {
@@ -372,75 +469,168 @@ struct FileBrowserView: View {
     }
 
     private func uploadLocalURLs(_ urls: [URL]) {
-        Task { await processUploadURLs(urls) }
+        Task { await prepareUploadURLs(urls) }
     }
 
     @MainActor
-    private func processUploadURLs(_ urls: [URL]) async {
-        let existingNames = Set(remoteVM.sortedItems.map(\.name))
-        var directFiles: [(URL, String, String)] = []
-        var conflicts: [OverwriteRequest] = []
+    private func prepareUploadURLs(_ urls: [URL]) async {
+        guard !urls.isEmpty else { return }
+        let cache = RemoteDirectoryCache(client: primaryClient)
+        var plan = TransferPlan()
 
         for url in urls {
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            let remotePath = remotePath(appending: url.lastPathComponent, to: remoteVM.currentPath)
-            if isDirectory {
-                await enqueueDirectoryUpload(localURL: url, remoteDirectoryPath: remotePath)
-                continue
-            }
-            if existingNames.contains(url.lastPathComponent) {
-                conflicts.append(OverwriteRequest(localURL: url, remotePath: remotePath,
-                                                   direction: .upload, fileName: url.lastPathComponent))
-            } else {
-                directFiles.append((url, remotePath, url.lastPathComponent))
-            }
+            let itemPlan = await uploadPlan(
+                for: url,
+                destinationDirectory: remoteVM.currentPath,
+                cache: cache
+            )
+            plan.merge(itemPlan)
         }
 
-        for (url, remotePath, _) in directFiles {
-            await appState.enqueue(server: server, direction: .upload,
-                                   localURL: url, remotePath: remotePath)
-        }
-        if !conflicts.isEmpty {
-            pendingOverwriteFiles = conflicts
-            showOverwriteConfirm = true
-        }
+        await presentOrCommitTransferPlan(plan)
     }
 
     @MainActor
-    private func enqueueDirectoryUpload(localURL: URL, remoteDirectoryPath: String) async {
-        await createRemoteDirectoryIfNeeded(remoteDirectoryPath)
-        let entries = directoryUploadEntries(for: localURL)
+    private func uploadPlan(
+        for localURL: URL,
+        destinationDirectory: String,
+        cache: RemoteDirectoryCache
+    ) async -> TransferPlan {
+        var plan = TransferPlan()
+        let isDirectory = localURLIsDirectory(localURL)
+        let destinationPath = remotePath(appending: localURL.lastPathComponent, to: destinationDirectory)
 
-        for entry in entries {
-            let childRemotePath = remotePath(appending: entry.relativePath, to: remoteDirectoryPath)
-            if entry.isDirectory {
-                await createRemoteDirectoryIfNeeded(childRemotePath)
+        do {
+            let existing = try await cache.item(named: localURL.lastPathComponent, in: destinationDirectory)
+            if isDirectory {
+                if let existing, !existing.isDirectory {
+                    plan.blockedMessages.append("远端已存在同名文件，无法上传文件夹：\(destinationPath)")
+                    return plan
+                }
+
+                let batchID = appState.beginTransferBatch(
+                    server: server,
+                    direction: .upload,
+                    name: localURL.lastPathComponent,
+                    localRootURL: localURL,
+                    remoteRootPath: destinationPath
+                )
+                let result = await uploadDirectoryPlan(
+                    localURL: localURL,
+                    remoteDirectoryPath: destinationPath,
+                    remoteDirectoryExists: existing?.isDirectory == true,
+                    batchID: batchID,
+                    cache: cache
+                )
+                appState.finishTransferBatch(id: batchID, expectedFileCount: result.fileCount)
+                plan.merge(result.plan)
             } else {
-                await appState.enqueue(server: server, direction: .upload,
-                                       localURL: entry.url, remotePath: childRemotePath)
+                let request = TransferRequest(
+                    localURL: localURL,
+                    remotePath: destinationPath,
+                    direction: .upload,
+                    fileName: localURL.lastPathComponent,
+                    fileSize: localFileSize(localURL),
+                    batchID: nil
+                )
+                if let existing {
+                    if existing.isDirectory {
+                        plan.blockedMessages.append("远端已存在同名文件夹，无法覆盖为文件：\(destinationPath)")
+                    } else {
+                        plan.conflicts.append(request)
+                    }
+                } else {
+                    plan.ready.append(request)
+                }
             }
+        } catch {
+            plan.blockedMessages.append("无法检查远端目录：\(destinationDirectory)。\(friendlyMessage(error))")
         }
+        return plan
     }
 
-    private func directoryUploadEntries(for rootURL: URL) -> [(url: URL, isDirectory: Bool, relativePath: String)] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: rootURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: showHidden ? [] : [.skipsHiddenFiles]
-        ) else { return [] }
+    private struct DirectoryPlanResult {
+        var plan = TransferPlan()
+        var fileCount = 0
+    }
 
-        var entries: [(URL, Bool, String)] = []
-        for case let childURL as URL in enumerator {
-            let isDirectory = (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            let relativePath = childURL.path
-                .replacingOccurrences(of: rootURL.path + "/", with: "")
-            if isDirectory {
-                entries.append((childURL, true, relativePath))
-            } else {
-                entries.append((childURL, false, relativePath))
+    @MainActor
+    private func uploadDirectoryPlan(
+        localURL: URL,
+        remoteDirectoryPath: String,
+        remoteDirectoryExists: Bool,
+        batchID: UUID,
+        cache: RemoteDirectoryCache
+    ) async -> DirectoryPlanResult {
+        var result = DirectoryPlanResult()
+        result.plan.directories.append(
+            DirectoryPreparation(localURL: nil, remotePath: remoteDirectoryPath, batchID: batchID)
+        )
+
+        let children: [URL]
+        do {
+            children = try FileManager.default.contentsOfDirectory(
+                at: localURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+                options: showHidden ? [] : [.skipsHiddenFiles]
+            )
+        } catch {
+            result.plan.blockedMessages.append("无法读取本地文件夹：\(localURL.path)。\(error.localizedDescription)")
+            return result
+        }
+
+        var existingItems: [String: RemoteFileItem] = [:]
+        if remoteDirectoryExists {
+            do {
+                existingItems = try await cache.itemsByName(in: remoteDirectoryPath)
+            } catch {
+                result.plan.blockedMessages.append("无法检查远端文件夹：\(remoteDirectoryPath)。\(friendlyMessage(error))")
+                return result
             }
         }
-        return entries
+
+        for childURL in children {
+            let name = childURL.lastPathComponent
+            let childRemotePath = remotePath(appending: name, to: remoteDirectoryPath)
+            let childIsDirectory = localURLIsDirectory(childURL)
+            let existing = existingItems[name]
+
+            if childIsDirectory {
+                if let existing, !existing.isDirectory {
+                    result.plan.blockedMessages.append("远端已存在同名文件，无法上传文件夹：\(childRemotePath)")
+                    continue
+                }
+                let childResult = await uploadDirectoryPlan(
+                    localURL: childURL,
+                    remoteDirectoryPath: childRemotePath,
+                    remoteDirectoryExists: existing?.isDirectory == true,
+                    batchID: batchID,
+                    cache: cache
+                )
+                result.fileCount += childResult.fileCount
+                result.plan.merge(childResult.plan)
+            } else {
+                result.fileCount += 1
+                let request = TransferRequest(
+                    localURL: childURL,
+                    remotePath: childRemotePath,
+                    direction: .upload,
+                    fileName: name,
+                    fileSize: localFileSize(childURL),
+                    batchID: batchID
+                )
+                if let existing {
+                    if existing.isDirectory {
+                        result.plan.blockedMessages.append("远端已存在同名文件夹，无法覆盖为文件：\(childRemotePath)")
+                    } else {
+                        result.plan.conflicts.append(request)
+                    }
+                } else {
+                    result.plan.ready.append(request)
+                }
+            }
+        }
+        return result
     }
 
     private func createRemoteDirectoryIfNeeded(_ path: String) async {
@@ -460,34 +650,277 @@ struct FileBrowserView: View {
         return basePath.hasSuffix("/") ? basePath + trimmedComponent : basePath + "/" + trimmedComponent
     }
 
-    // MARK: - Download selected
     private func downloadSelected() {
         let selected = remoteVM.sortedItems.filter { remoteVM.selectedIDs.contains($0.id) }
+        downloadRemoteItems(selected)
+    }
+
+    private func downloadRemoteItems(_ selected: [RemoteFileItem]) {
+        Task { await prepareDownloadItems(selected) }
+    }
+
+    @MainActor
+    private func prepareDownloadItems(_ selected: [RemoteFileItem]) async {
+        guard !selected.isEmpty else { return }
         let destinationDir = URL(fileURLWithPath: localVM.currentPath, isDirectory: true)
+        var plan = TransferPlan()
 
-        var directFiles: [(URL, String)] = []
-        var conflicts: [OverwriteRequest] = []
-
-        for item in selected where !item.isDirectory {
-            let localURL = destinationDir.appendingPathComponent(item.name)
-            if FileManager.default.fileExists(atPath: localURL.path) {
-                conflicts.append(OverwriteRequest(localURL: localURL, remotePath: item.path,
-                                                   direction: .download, fileName: item.name))
-            } else {
-                directFiles.append((localURL, item.path))
-            }
+        for item in selected {
+            let itemPlan = await downloadPlan(for: item, destinationParentURL: destinationDir)
+            plan.merge(itemPlan)
         }
 
-        for (localURL, remotePath) in directFiles {
-            Task {
-                await appState.enqueue(server: server, direction: .download,
-                                       localURL: localURL, remotePath: remotePath)
+        await presentOrCommitTransferPlan(plan)
+    }
+
+    @MainActor
+    private func downloadPlan(
+        for item: RemoteFileItem,
+        destinationParentURL: URL
+    ) async -> TransferPlan {
+        var plan = TransferPlan()
+        let localURL = destinationParentURL.appendingPathComponent(item.name, isDirectory: item.isDirectory)
+
+        if item.isDirectory {
+            switch localDestinationState(for: localURL) {
+            case .file:
+                plan.blockedMessages.append("本地已存在同名文件，无法下载文件夹：\(localURL.path)")
+                return plan
+            case .directory, .missing:
+                let batchID = appState.beginTransferBatch(
+                    server: server,
+                    direction: .download,
+                    name: item.name,
+                    localRootURL: localURL,
+                    remoteRootPath: item.path
+                )
+                let result = await downloadDirectoryPlan(
+                    remoteItem: item,
+                    destinationParentURL: destinationParentURL,
+                    batchID: batchID
+                )
+                appState.finishTransferBatch(id: batchID, expectedFileCount: result.fileCount)
+                plan.merge(result.plan)
+            }
+        } else {
+            let request = TransferRequest(
+                localURL: localURL,
+                remotePath: item.path,
+                direction: .download,
+                fileName: item.name,
+                fileSize: item.size,
+                batchID: nil
+            )
+            switch localDestinationState(for: localURL) {
+            case .directory:
+                plan.blockedMessages.append("本地已存在同名文件夹，无法覆盖为文件：\(localURL.path)")
+            case .file:
+                plan.conflicts.append(request)
+            case .missing:
+                plan.ready.append(request)
             }
         }
-        if !conflicts.isEmpty {
-            pendingOverwriteFiles = conflicts
+        return plan
+    }
+
+    @MainActor
+    private func downloadDirectoryPlan(
+        remoteItem: RemoteFileItem,
+        destinationParentURL: URL,
+        batchID: UUID
+    ) async -> DirectoryPlanResult {
+        let localDirectoryURL = destinationParentURL.appendingPathComponent(remoteItem.name, isDirectory: true)
+        var result = DirectoryPlanResult()
+        result.plan.directories.append(
+            DirectoryPreparation(localURL: localDirectoryURL, remotePath: nil, batchID: batchID)
+        )
+
+        do {
+            let children = try await primaryClient.listDirectory(remoteItem.path)
+            for child in children {
+                let childLocalURL = localDirectoryURL.appendingPathComponent(child.name, isDirectory: child.isDirectory)
+                if child.isDirectory {
+                    if case .file = localDestinationState(for: childLocalURL) {
+                        result.plan.blockedMessages.append("本地已存在同名文件，无法下载文件夹：\(childLocalURL.path)")
+                        continue
+                    }
+                    let childResult = await downloadDirectoryPlan(
+                        remoteItem: child,
+                        destinationParentURL: localDirectoryURL,
+                        batchID: batchID
+                    )
+                    result.fileCount += childResult.fileCount
+                    result.plan.merge(childResult.plan)
+                } else {
+                    result.fileCount += 1
+                    let request = TransferRequest(
+                        localURL: childLocalURL,
+                        remotePath: child.path,
+                        direction: .download,
+                        fileName: child.name,
+                        fileSize: child.size,
+                        batchID: batchID
+                    )
+                    switch localDestinationState(for: childLocalURL) {
+                    case .directory:
+                        result.plan.blockedMessages.append("本地已存在同名文件夹，无法覆盖为文件：\(childLocalURL.path)")
+                    case .file:
+                        result.plan.conflicts.append(request)
+                    case .missing:
+                        result.plan.ready.append(request)
+                    }
+                }
+            }
+        } catch {
+            result.plan.blockedMessages.append("无法读取远端文件夹：\(remoteItem.path)。\(friendlyMessage(error))")
+        }
+        return result
+    }
+
+    @MainActor
+    private func presentOrCommitTransferPlan(_ plan: TransferPlan) async {
+        guard plan.hasWork else {
+            showTransferPlanWarnings(plan.blockedMessages)
+            return
+        }
+
+        if plan.conflicts.isEmpty {
+            await commitTransferPlan(plan, includingConflicts: true)
+        } else {
+            pendingTransferPlan = plan
             showOverwriteConfirm = true
         }
+    }
+
+    @MainActor
+    private func commitTransferPlan(_ plan: TransferPlan, includingConflicts: Bool) async {
+        await prepareDirectories(plan.directories)
+
+        let acceptedRequests = plan.ready + (includingConflicts ? plan.conflicts : [])
+        for request in acceptedRequests {
+            await appState.enqueue(
+                server: server,
+                direction: request.direction,
+                localURL: request.localURL,
+                remotePath: request.remotePath,
+                fileSize: request.fileSize,
+                batchID: request.batchID
+            )
+        }
+
+        if !includingConflicts {
+            appState.discardEmptyTransferBatches(ids: plan.conflictBatchIDs)
+        }
+        showTransferPlanWarnings(plan.blockedMessages)
+    }
+
+    @MainActor
+    private func prepareDirectories(_ directories: [DirectoryPreparation]) async {
+        var remotePaths = Set<String>()
+        var localURLs = Set<URL>()
+
+        for directory in directories {
+            if let localURL = directory.localURL, localURLs.insert(localURL).inserted {
+                do {
+                    try FileManager.default.createDirectory(
+                        at: localURL,
+                        withIntermediateDirectories: true
+                    )
+                } catch {
+                    appState.alertItem = AlertItem(
+                        title: "创建本地文件夹失败",
+                        message: "\(localURL.path)：\(error.localizedDescription)"
+                    )
+                }
+            }
+            if let remotePath = directory.remotePath, remotePaths.insert(remotePath).inserted {
+                await createRemoteDirectoryIfNeeded(remotePath)
+            }
+        }
+    }
+
+    private var overwriteMessage: String {
+        guard let plan = pendingTransferPlan else { return "" }
+        let names = plan.conflicts.prefix(12).map { request in
+            request.direction == .upload ? request.remotePath : request.localURL.path
+        }.joined(separator: "\n")
+        let moreCount = max(0, plan.conflicts.count - 12)
+        var lines = ["以下项目已存在，是否覆盖？", names]
+        if moreCount > 0 {
+            lines.append("另有 \(moreCount) 项未显示")
+        }
+        if !plan.ready.isEmpty {
+            lines.append("未同名的 \(plan.ready.count) 项会在确认后一起加入队列。")
+        }
+        if !plan.blockedMessages.isEmpty {
+            lines.append("另有 \(plan.blockedMessages.count) 项无法自动处理。")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func discardPendingTransferPlan(_ plan: TransferPlan) {
+        appState.discardEmptyTransferBatches(ids: plan.allBatchIDs)
+    }
+
+    private func showTransferPlanWarnings(_ messages: [String]) {
+        guard !messages.isEmpty else { return }
+        let visible = messages.prefix(8).joined(separator: "\n")
+        let more = messages.count > 8 ? "\n另有 \(messages.count - 8) 项未显示。" : ""
+        appState.alertItem = AlertItem(title: "部分项目无法传输", message: visible + more)
+    }
+
+    private enum LocalDestinationState {
+        case missing
+        case file
+        case directory
+    }
+
+    private func localDestinationState(for url: URL) -> LocalDestinationState {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return .missing
+        }
+        return isDirectory.boolValue ? .directory : .file
+    }
+
+    private func localURLIsDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+    }
+
+    private func localFileSize(_ url: URL) -> Int64? {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+        return values?.fileSize.map(Int64.init)
+    }
+
+    private func friendlyMessage(_ error: Error) -> String {
+        FTPError.friendly(error).errorDescription ?? error.localizedDescription
+    }
+}
+
+@MainActor
+private final class RemoteDirectoryCache {
+    private let client: any AnyFTPClient
+    private var cachedItems: [String: [String: RemoteFileItem]] = [:]
+
+    init(client: any AnyFTPClient) {
+        self.client = client
+    }
+
+    func item(named name: String, in path: String) async throws -> RemoteFileItem? {
+        try await itemsByName(in: path)[name]
+    }
+
+    func itemsByName(in path: String) async throws -> [String: RemoteFileItem] {
+        if let items = cachedItems[path] {
+            return items
+        }
+        let items = try await client.listDirectory(path)
+        var mapped: [String: RemoteFileItem] = [:]
+        for item in items {
+            mapped[item.name] = item
+        }
+        cachedItems[path] = mapped
+        return mapped
     }
 }
 
@@ -814,8 +1247,6 @@ private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let urls = Self.fileURLs(from: sender)
         guard !urls.isEmpty else { return false }
-        // FIXME(AppSandbox): call startAccessingSecurityScopedResource()
-        // for dropped file URLs before reading them.
         onDrop(urls)
         return true
     }
@@ -831,7 +1262,7 @@ private final class FileDropHostingView<Root: View>: NSHostingView<Root> {
 // MARK: - Remote File List
 struct RemoteFileList: View {
     @ObservedObject var vm: RemoteFileVM
-    let onDownload: () -> Void
+    let onDownload: ([RemoteFileItem]) -> Void
     let onDelete: () -> Void
     let onRename: (RemoteFileItem) -> Void
 
@@ -860,9 +1291,10 @@ struct RemoteFileList: View {
                     }.width(130)
                 }
                 .contextMenu(forSelectionType: UUID.self) { ids in
-                    if !ids.isEmpty {
-                        Button("下载") { onDownload() }
-                        if ids.count == 1, let item = vm.sortedItems.first(where: { ids.contains($0.id) }) {
+                    let items = selectedItems(for: ids)
+                    if !items.isEmpty {
+                        Button("下载") { onDownload(items) }
+                        if items.count == 1, let item = items.first {
                             if item.isDirectory {
                                 Button("打开文件夹") { Task { await vm.enter(item) } }
                             }
@@ -878,6 +1310,10 @@ struct RemoteFileList: View {
                 }
             }
         }
+    }
+
+    private func selectedItems(for ids: Set<UUID>) -> [RemoteFileItem] {
+        vm.sortedItems.filter { ids.contains($0.id) }
     }
 }
 

@@ -1,40 +1,348 @@
 // TransferQueueView.swift + WelcomeView.swift
 import SwiftUI
 
+private func safeProgressValue(_ value: Double) -> Double {
+    guard value.isFinite else { return 0 }
+    return min(1.0, max(0.0, value))
+}
+
+private func progressPercentText(_ value: Double) -> String {
+    "\(Int(safeProgressValue(value) * 100))%"
+}
+
 // MARK: - TransferQueueView
 struct TransferQueueView: View {
     @EnvironmentObject var appState: AppState
+    @State private var selectedIDs: Set<UUID> = []
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("传输队列").font(.headline)
-                Spacer()
-                Button("清除已完成") {
-                    Task { await appState.engine.clearCompleted()
-                        appState.transfers.removeAll { $0.status == .completed || $0.status == .cancelled }
-                    }
-                }.font(.caption).disabled(appState.transfers.filter {
-                    $0.status == .completed || $0.status == .cancelled
-                }.isEmpty)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
+            header
 
             Divider()
 
-            if appState.transfers.isEmpty {
+            if appState.transfers.isEmpty && appState.transferBatches.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "tray").font(.largeTitle).foregroundColor(.secondary)
                     Text("暂无传输任务").foregroundColor(.secondary).font(.callout)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(appState.transfers) { task in
-                    TransferRow(task: task)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                }
-                .listStyle(.plain)
+                queueContent
             }
+        }
+        .onChange(of: visibleQueueIDs) { _, ids in
+            selectedIDs.formIntersection(ids)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 9) {
+            Text("传输队列").font(.headline)
+            if !selectedIDs.isEmpty {
+                Text("\(selectedIDs.count) 已选")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            selectedActionButton("pause.circle", "暂停选中项") {
+                Task { await appState.pauseTransfers(matching: selectedIDs) }
+            }
+            selectedActionButton("play.circle", "继续选中项") {
+                Task { await appState.resumeTransfers(matching: selectedIDs) }
+            }
+            selectedActionButton("arrow.clockwise.circle", "开始或重试选中项") {
+                Task { await appState.startOrRetryTransfers(matching: selectedIDs) }
+            }
+            selectedActionButton("xmark.circle", "取消选中项") {
+                Task { await appState.cancelTransfers(matching: selectedIDs) }
+            }
+            selectedActionButton("trash", "删除选中项", role: .destructive) {
+                Task {
+                    await appState.removeTransfers(matching: selectedIDs)
+                    await MainActor.run { selectedIDs.removeAll() }
+                }
+            }
+            Menu {
+                Button {
+                    Task { await appState.startOrRetryUnfinishedTransfers() }
+                } label: {
+                    Label("重试未完成项", systemImage: "arrow.clockwise")
+                }
+                .disabled(!hasUnfinishedTransfers)
+
+                Divider()
+
+                Button {
+                    Task { await appState.clearCompletedTransfers() }
+                } label: {
+                    Label("清除已完成/已取消", systemImage: "checkmark.circle")
+                }
+                .disabled(!hasCompletedOrCancelledTransfers)
+
+                Button {
+                    Task { await appState.clearUnfinishedTransfers() }
+                } label: {
+                    Label("清除未完成", systemImage: "minus.circle")
+                }
+                .disabled(!hasUnfinishedTransfers)
+
+                Button(role: .destructive) {
+                    Task {
+                        await appState.clearAllTransfers()
+                        await MainActor.run { selectedIDs.removeAll() }
+                    }
+                } label: {
+                    Label("全部清除", systemImage: "trash")
+                }
+                .disabled(appState.transfers.isEmpty && appState.transferBatches.isEmpty)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .frame(width: 20, height: 20)
+            }
+            .menuStyle(.borderlessButton)
+            .help("更多队列操作")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var standaloneTransfers: [TransferTask] {
+        appState.transfers.filter { $0.batchID == nil }
+    }
+
+    private var hasUnfinishedTransfers: Bool {
+        appState.transfers.contains { $0.status.isUnfinished }
+    }
+
+    private var hasCompletedOrCancelledTransfers: Bool {
+        appState.transfers.contains { $0.status.isCompletedOrCancelled } ||
+        appState.transferBatches.contains { batch in
+            batch.isPrepared &&
+            batch.expectedFileCount == 0 &&
+            !appState.transfers.contains { $0.batchID == batch.id }
+        }
+    }
+
+    private func tasks(for batch: TransferBatch) -> [TransferTask] {
+        appState.transfers.filter { $0.batchID == batch.id }
+    }
+
+    private var visibleQueueIDs: Set<UUID> {
+        Set(appState.transferBatches.map(\.id) + standaloneTransfers.map(\.id))
+    }
+
+    private var queueContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(appState.transferBatches) { batch in
+                    let tasks = tasks(for: batch)
+                    SelectableTransferRow(
+                        isSelected: selectedIDs.contains(batch.id),
+                        onToggle: { toggleSelection(batch.id) }
+                    ) {
+                        TransferBatchRow(batch: batch, tasks: tasks)
+                    }
+                    Divider().padding(.leading, 44)
+                }
+                ForEach(standaloneTransfers) { task in
+                    SelectableTransferRow(
+                        isSelected: selectedIDs.contains(task.id),
+                        onToggle: { toggleSelection(task.id) }
+                    ) {
+                        TransferRow(task: task)
+                    }
+                    Divider().padding(.leading, 44)
+                }
+            }
+        }
+    }
+
+    private func toggleSelection(_ id: UUID) {
+        if selectedIDs.contains(id) {
+            selectedIDs.remove(id)
+        } else {
+            selectedIDs.insert(id)
+        }
+    }
+
+    private func selectedActionButton(
+        _ systemImage: String,
+        _ help: String,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role) {
+            action()
+        } label: {
+            Image(systemName: systemImage)
+                .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.plain)
+        .disabled(selectedIDs.isEmpty)
+        .help(help)
+    }
+}
+
+private struct SelectableTransferRow<Content: View>: View {
+    let isSelected: Bool
+    let onToggle: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Button(action: onToggle) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .help(isSelected ? "取消选择" : "选择")
+
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+    }
+}
+
+// MARK: - Transfer Batch Row
+struct TransferBatchRow: View {
+    @EnvironmentObject var appState: AppState
+    let batch: TransferBatch
+    let tasks: [TransferTask]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Image(systemName: batch.direction == .upload
+                      ? "folder.badge.arrow.up" : "folder.badge.arrow.down")
+                    .foregroundColor(batch.direction == .upload ? .blue : .green)
+                    .font(.system(size: 16))
+                    .frame(width: 18)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(batch.name)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(statusText)
+                        .font(.caption)
+                        .foregroundColor(statusColor)
+                    Text(countText)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+                actionButtons
+            }
+
+            ProgressView(value: progress)
+                .progressViewStyle(.linear)
+                .tint(statusColor)
+        }
+    }
+
+    private var subtitle: String {
+        batch.direction == .upload
+        ? "\(batch.serverName) -> \(batch.remoteRootPath)"
+        : "\(batch.serverName) -> \(batch.localRootURL.path)"
+    }
+
+    private var countText: String {
+        if tasks.isEmpty {
+            return batch.isPrepared ? "0/\(batch.expectedFileCount) 文件" : "准备中"
+        }
+        let done = tasks.filter { $0.status.isCompletedOrCancelled }.count
+        let total = max(batch.expectedFileCount, tasks.count)
+        return "\(done)/\(total) 文件"
+    }
+
+    private var progress: Double {
+        guard !tasks.isEmpty else {
+            return batch.isPrepared && batch.expectedFileCount == 0 ? 1 : 0
+        }
+        let totalBytes = tasks.reduce(Int64(0)) { $0 + max($1.fileSize, $1.bytesTransferred) }
+        if totalBytes > 0 {
+            let transferred = tasks.reduce(Int64(0)) { sum, task in
+                if task.status == .completed { return sum + max(task.fileSize, task.bytesTransferred) }
+                return sum + task.bytesTransferred
+            }
+            return safeProgressValue(Double(transferred) / Double(totalBytes))
+        }
+        let totalProgress = tasks.map { $0.status.progressFraction }.reduce(0, +)
+        return safeProgressValue(totalProgress / Double(tasks.count))
+    }
+
+    private var statusText: String {
+        if !batch.isPrepared { return "准备中" }
+        if tasks.isEmpty {
+            return batch.expectedFileCount == 0 ? "完成" : "等待确认"
+        }
+        if tasks.contains(where: { if case .inProgress = $0.status { return true }; return false }) {
+            return "传输中"
+        }
+        if tasks.contains(where: { if case .failed = $0.status { return true }; return false }) {
+            return "有失败"
+        }
+        let unfinished = tasks.filter { $0.status.isUnfinished }
+        if !unfinished.isEmpty && unfinished.allSatisfy({ if case .paused = $0.status { return true }; return false }) {
+            return "已暂停"
+        }
+        if unfinished.isEmpty { return "完成" }
+        return "等待中"
+    }
+
+    private var statusColor: Color {
+        switch statusText {
+        case "传输中": return .blue
+        case "有失败": return .red
+        case "已暂停": return .orange
+        case "完成": return .green
+        default: return .secondary
+        }
+    }
+
+    @ViewBuilder private var actionButtons: some View {
+        HStack(spacing: 5) {
+            Button {
+                Task { await appState.pauseTransfers(matching: [batch.id]) }
+            } label: {
+                Image(systemName: "pause.circle").foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("暂停目录批次")
+            .disabled(!tasks.contains(where: { $0.status.isUnfinished }))
+
+            Button {
+                Task { await appState.startOrRetryTransfers(matching: [batch.id]) }
+            } label: {
+                Image(systemName: "play.circle").foregroundColor(.green)
+            }
+            .buttonStyle(.plain)
+            .help("继续或重试目录批次")
+            .disabled(!tasks.contains(where: { $0.status.isUnfinished }))
+
+            Button {
+                Task { await appState.cancelTransfers(matching: [batch.id]) }
+            } label: {
+                Image(systemName: "xmark.circle").foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("取消目录批次")
+            .disabled(!tasks.contains(where: { $0.status.isUnfinished }))
         }
     }
 }
@@ -55,7 +363,11 @@ struct TransferRow: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(task.fileName).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    Text(task.serverName).font(.caption2).foregroundColor(.secondary)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
 
                 Spacer()
@@ -77,7 +389,7 @@ struct TransferRow: View {
             // Progress bar
             switch task.status {
             case .inProgress(let p, _):
-                ProgressView(value: p).progressViewStyle(.linear).tint(.blue)
+                ProgressView(value: safeProgressValue(p)).progressViewStyle(.linear).tint(.blue)
             case .completed:
                 ProgressView(value: 1.0).progressViewStyle(.linear).tint(.green)
             case .paused(let offset):
@@ -89,13 +401,20 @@ struct TransferRow: View {
 
     private func pausedProgress(offset: Int64) -> Double {
         guard task.fileSize > 0 else { return 0 }
-        return min(1.0, max(0.0, Double(offset) / Double(task.fileSize)))
+        return safeProgressValue(Double(offset) / Double(task.fileSize))
+    }
+
+    private var subtitle: String {
+        let target = task.direction == .upload
+        ? task.remotePath
+        : task.localURL.deletingLastPathComponent().path
+        return "\(task.serverName) -> \(target)"
     }
 
     @ViewBuilder var statusLabel: some View {
         switch task.status {
         case .queued:              Text("等待中").font(.caption).foregroundColor(.secondary)
-        case .inProgress(let p,_): Text("\(Int(p*100))%").font(.caption).foregroundColor(.blue)
+        case .inProgress(let p,_): Text(progressPercentText(p)).font(.caption).foregroundColor(.blue)
         case .paused:              Text("已暂停").font(.caption).foregroundColor(.orange)
         case .completed:           Text("完成").font(.caption).foregroundColor(.green)
         case .failed(let m):       Text(m).font(.caption).foregroundColor(.red).lineLimit(2)
@@ -107,19 +426,34 @@ struct TransferRow: View {
         if case .inProgress = task.status {
             Button { Task { await appState.engine.pause(id: task.id) } } label: {
                 Image(systemName: "pause.circle").foregroundColor(.secondary)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.plain).help("暂停")
+        }
+        if case .queued = task.status {
+            Button { Task { await appState.engine.pause(id: task.id) } } label: {
+                Image(systemName: "pause.circle").foregroundColor(.secondary)
+            }.buttonStyle(.plain).help("暂停")
         }
         if case .paused = task.status {
             Button {
                 Task {
                     await appState.engine.resume(id: task.id)
                 }
-            } label: { Image(systemName: "play.circle").foregroundColor(.green) }.buttonStyle(.plain)
+            } label: { Image(systemName: "play.circle").foregroundColor(.green) }.buttonStyle(.plain).help("继续")
+        }
+        if case .failed = task.status {
+            Button {
+                Task { await appState.startOrRetryTransfers(matching: [task.id]) }
+            } label: { Image(systemName: "arrow.clockwise.circle").foregroundColor(.orange) }.buttonStyle(.plain).help("重试")
+        }
+        if case .cancelled = task.status {
+            Button {
+                Task { await appState.startOrRetryTransfers(matching: [task.id]) }
+            } label: { Image(systemName: "arrow.clockwise.circle").foregroundColor(.orange) }.buttonStyle(.plain).help("重新开始")
         }
         if task.status != .completed && task.status != .cancelled {
             Button { Task { await appState.engine.cancel(id: task.id) } } label: {
                 Image(systemName: "xmark.circle").foregroundColor(.secondary)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.plain).help("取消")
         }
     }
 }

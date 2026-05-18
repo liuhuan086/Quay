@@ -63,6 +63,7 @@ final class AppState: ObservableObject {
     let engine = TransferEngine()
 
     private var cancellables = Set<AnyCancellable>()
+    private var scopedTransferURLsByTaskID: [UUID: URL] = [:]
 
     // MARK: - Init
     init() {
@@ -305,6 +306,7 @@ final class AppState: ObservableObject {
             direction: direction, localURL: localURL, remotePath: remotePath,
             fileSize: size, isAutoSync: isAutoSync, batchID: batchID
         )
+        beginLocalTransferAccessIfNeeded(for: task)
         transfers.append(task)
         transferBadgeState.update(from: transfers)
         await engine.enqueue(task)
@@ -339,6 +341,7 @@ final class AppState: ObservableObject {
     func clearCompletedTransfers() async {
         let batchIDsToRemove = Set(transferBatches.filter { isCompletedOrCancelledBatch($0) }.map(\.id))
         await engine.clearCompleted()
+        endLocalTransferAccessIfNeeded(for: transfers.filter { $0.status.isCompletedOrCancelled })
         transfers.removeAll { $0.status.isCompletedOrCancelled }
         transferBatches.removeAll { batchIDsToRemove.contains($0.id) }
         transferBadgeState.update(from: transfers)
@@ -346,6 +349,7 @@ final class AppState: ObservableObject {
 
     func clearUnfinishedTransfers() async {
         let removedIDs = await engine.clearUnfinished()
+        endLocalTransferAccessIfNeeded(for: transfers.filter { removedIDs.contains($0.id) })
         transfers.removeAll { removedIDs.contains($0.id) }
         pruneBatchesAfterTaskRemoval()
         transferBadgeState.update(from: transfers)
@@ -353,6 +357,7 @@ final class AppState: ObservableObject {
 
     func clearAllTransfers() async {
         await engine.clearAll()
+        endLocalTransferAccessIfNeeded(for: transfers)
         transfers.removeAll()
         transferBatches.removeAll()
         transferBadgeState.update(from: transfers)
@@ -361,6 +366,7 @@ final class AppState: ObservableObject {
     func removeTransfers(matching selection: Set<UUID>) async {
         let taskIDs = taskIDs(matching: selection)
         let removedTaskIDs = await engine.remove(ids: taskIDs)
+        endLocalTransferAccessIfNeeded(for: transfers.filter { removedTaskIDs.contains($0.id) })
         transfers.removeAll { removedTaskIDs.contains($0.id) }
         transferBatches.removeAll { selection.contains($0.id) }
         pruneBatchesAfterTaskRemoval()
@@ -380,11 +386,14 @@ final class AppState: ObservableObject {
     }
 
     func startOrRetryTransfers(matching selection: Set<UUID>) async {
-        await engine.startOrRetry(ids: taskIDs(matching: selection))
+        let ids = taskIDs(matching: selection)
+        beginLocalTransferAccessIfNeeded(for: transfers.filter { ids.contains($0.id) })
+        await engine.startOrRetry(ids: ids)
     }
 
     func startOrRetryUnfinishedTransfers() async {
         let ids = Set(transfers.filter { $0.status.isUnfinished }.map(\.id))
+        beginLocalTransferAccessIfNeeded(for: transfers.filter { ids.contains($0.id) })
         await engine.startOrRetry(ids: ids)
     }
 
@@ -430,10 +439,14 @@ final class AppState: ObservableObject {
                             self.transfers[i] = task
                             self.transferBadgeState.update(from: self.transfers)
                         }
+                        if task.status == .cancelled {
+                            self.endLocalTransferAccessIfNeeded(for: task)
+                        }
                     }
                 },
                 onComplete: { [weak self] task in
                     Task { @MainActor [weak self] in
+                        self?.endLocalTransferAccessIfNeeded(for: task)
                         self?.notifications.sendTransferComplete(
                             fileName: task.fileName, direction: task.direction)
                         self?.lastCompletedTransferServerID = task.serverID
@@ -441,6 +454,7 @@ final class AppState: ObservableObject {
                 },
                 onFailure: { [weak self] task in
                     Task { @MainActor [weak self] in
+                        self?.endLocalTransferAccessIfNeeded(for: task)
                         guard case .failed(let message) = task.status else { return }
                         self?.alertItem = AlertItem(
                             title: "传输失败",
@@ -461,6 +475,36 @@ final class AppState: ObservableObject {
         }
         let friendly = FTPError.friendly(error)
         alertItem = AlertItem(title: "错误", message: friendly.errorDescription ?? error.localizedDescription)
+    }
+
+    private func beginLocalTransferAccessIfNeeded(for tasks: [TransferTask]) {
+        for task in tasks {
+            beginLocalTransferAccessIfNeeded(for: task)
+        }
+    }
+
+    private func beginLocalTransferAccessIfNeeded(for task: TransferTask) {
+        guard task.direction == .upload,
+              scopedTransferURLsByTaskID[task.id] == nil else { return }
+        // Must be the exact URL delivered by the open panel / drag-drop.
+        // Standardizing resolves symlinks (e.g. /var→/private/var, /tmp,
+        // external volumes) into a path the sandbox extension does not
+        // cover, which silently denies access for queued uploads.
+        let url = task.localURL
+        if url.startAccessingSecurityScopedResource() {
+            scopedTransferURLsByTaskID[task.id] = url
+        }
+    }
+
+    private func endLocalTransferAccessIfNeeded(for tasks: [TransferTask]) {
+        for task in tasks {
+            endLocalTransferAccessIfNeeded(for: task)
+        }
+    }
+
+    private func endLocalTransferAccessIfNeeded(for task: TransferTask) {
+        guard let url = scopedTransferURLsByTaskID.removeValue(forKey: task.id) else { return }
+        url.stopAccessingSecurityScopedResource()
     }
 }
 
