@@ -18,6 +18,7 @@ actor ConnectionPool {
     private let serverConfig: ServerConfig
     private let maxSize: Int
     private let idleTimeout: TimeInterval
+    private var password: String
 
     // MARK: State
     private var entries: [PoolEntry] = []
@@ -28,6 +29,7 @@ actor ConnectionPool {
         self.serverConfig = serverConfig
         self.maxSize      = maxSize
         self.idleTimeout  = idleTimeout
+        self.password     = serverConfig.password
     }
 
     // MARK: - Borrow a connection
@@ -38,7 +40,11 @@ actor ConnectionPool {
     /// at every `await` point. To avoid two callers grabbing the same connection or
     /// exceeding `maxSize`, every slot is reserved synchronously (within one actor turn)
     /// before any `await`.
-    func borrowClient(password: String) async throws -> any AnyFTPClient {
+    func borrowClient(password newPassword: String? = nil) async throws -> any AnyFTPClient {
+        if let newPassword {
+            updateCachedPassword(newPassword)
+        }
+
         while true {
             // 1. Try to find an idle, connected entry — reserve it synchronously first.
             if let idx = entries.indices.first(where: { !entries[$0].inUse }) {
@@ -78,6 +84,10 @@ actor ConnectionPool {
                 waiters.append(cont)
             }
         }
+    }
+
+    func updateCachedPassword(_ newPassword: String) {
+        password = newPassword
     }
 
     // MARK: - Return a connection
@@ -138,6 +148,11 @@ actor ConnectionPoolRegistry {
 
     func existingPool(forServerID id: UUID) -> ConnectionPool? {
         pools[id]
+    }
+
+    func updateCachedPassword(_ password: String, forServerID id: UUID) async {
+        guard let pool = pools[id] else { return }
+        await pool.updateCachedPassword(password)
     }
 
     func removePool(for serverID: UUID) async {
