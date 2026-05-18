@@ -403,6 +403,29 @@ final class ServerRepositoryTests: XCTestCase {
         func deletePassword(for key: String) -> Bool { false }
     }
 
+    private final class DeleteFailingMemoryKeychain: KeychainStoring, @unchecked Sendable {
+        private let lock = NSLock()
+        private var passwords: [String: String] = [:]
+
+        func savePassword(_ password: String, for key: String, label: String?) throws {
+            lock.lock()
+            passwords[key] = password
+            lock.unlock()
+        }
+
+        func getPassword(for key: String) throws -> String? {
+            lock.lock()
+            let password = passwords[key]
+            lock.unlock()
+            return password
+        }
+
+        @discardableResult
+        func deletePassword(for key: String) -> Bool {
+            false
+        }
+    }
+
     func test_unrelatedWritePreservesLegacyWhenKeychainMigrationFails() async throws {
         let failKey = "swiftftp.tests.failkc.\(UUID().uuidString)"
         let repo = ServerRepository(key: failKey, keychain: AlwaysFailingKeychain())
@@ -469,6 +492,42 @@ final class ServerRepositoryTests: XCTestCase {
         // Server removal always succeeds; only the Keychain scrub failed.
         XCTAssertFalse(credentialCleared)
         XCTAssertFalse(repo.fetchAll().contains(where: { $0.id == id }))
+    }
+
+    func test_failedDeleteScrubDoesNotReuseStaleCredentialAfterReimport() async throws {
+        let failKey = "swiftftp.tests.stale.\(UUID().uuidString)"
+        let keychain = DeleteFailingMemoryKeychain()
+        let repo = ServerRepository(key: failKey, keychain: keychain)
+        defer { UserDefaults.standard.removeObject(forKey: failKey) }
+
+        let id = UUID()
+        let original = ServerConfig(
+            id: id,
+            displayName: "Original",
+            host: "old.local",
+            username: "u",
+            password: "old-secret"
+        )
+        try await repo.save(original)
+        let originalPassword = try await repo.password(for: id)
+        XCTAssertEqual(originalPassword, "old-secret")
+
+        let credentialCleared = await repo.delete(id)
+        XCTAssertFalse(credentialCleared)
+
+        let reimportedJSON = """
+        [{"id":"\(id.uuidString)","displayName":"Reimported","host":"new.local","username":"u"}]
+        """
+        try await repo.importJSON(Data(reimportedJSON.utf8))
+
+        let blockedPassword = try await repo.password(for: id)
+        XCTAssertEqual(blockedPassword, "")
+
+        var updated = repo.fetchAll().first(where: { $0.id == id })!
+        updated.password = "fresh-secret"
+        try await repo.update(updated)
+        let freshPassword = try await repo.password(for: id)
+        XCTAssertEqual(freshPassword, "fresh-secret")
     }
 
     func test_sortedByDisplayName() async throws {

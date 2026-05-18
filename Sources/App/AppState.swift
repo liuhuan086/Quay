@@ -199,7 +199,7 @@ final class AppState: ObservableObject {
         if !credentialCleared {
             alertItem = AlertItem(
                 title: "服务器已删除",
-                message: "已移除该服务器，但保存在 Keychain 中的密码未能清除。该残留项以唯一 ID 标识、不会再被使用，可在“钥匙串访问”中手动删除。"
+                message: "已移除该服务器，但保存在 Keychain 中的密码未能清除。SwiftFTP 会阻止该残留项被自动复用，你也可以在“钥匙串访问”中手动删除。"
             )
         }
     }
