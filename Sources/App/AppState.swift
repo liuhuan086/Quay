@@ -113,7 +113,8 @@ final class AppState: ObservableObject {
     let engine = TransferEngine()
 
     private var cancellables = Set<AnyCancellable>()
-    private var scopedTransferURLsByTaskID: [UUID: URL] = [:]
+    private var scopedTransferAccessURLsByTaskID: [UUID: URL] = [:]
+    private var activeScopedTransferURLsByTaskID: [UUID: URL] = [:]
 
     // MARK: - Init
     init() {
@@ -381,16 +382,19 @@ final class AppState: ObservableObject {
         remotePath: String,
         isAutoSync: Bool = false,
         fileSize: Int64? = nil,
-        batchID: UUID? = nil
+        batchID: UUID? = nil,
+        securityScopedURL: URL? = nil
     ) async {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: localURL.path)
-        let size  = fileSize ?? (attrs?[.size] as? Int64) ?? 0
+        let size = fileSize ?? localFileSize(
+            for: localURL,
+            securityScopedURL: direction == .upload ? securityScopedURL : nil
+        )
         let task  = TransferTask(
             serverID: server.id, serverName: server.displayName,
             direction: direction, localURL: localURL, remotePath: remotePath,
             fileSize: size, isAutoSync: isAutoSync, batchID: batchID
         )
-        beginLocalTransferAccessIfNeeded(for: task)
+        beginLocalTransferAccessIfNeeded(for: task, securityScopedURL: securityScopedURL)
         transfers.append(task)
         transferBadgeState.update(from: transfers)
         await engine.enqueue(task)
@@ -424,8 +428,9 @@ final class AppState: ObservableObject {
 
     func clearCompletedTransfers() async {
         let batchIDsToRemove = Set(transferBatches.filter { isCompletedOrCancelledBatch($0) }.map(\.id))
+        let removedTransfers = transfers.filter { $0.status.isCompletedOrCancelled }
         await engine.clearCompleted()
-        endLocalTransferAccessIfNeeded(for: transfers.filter { $0.status.isCompletedOrCancelled })
+        forgetLocalTransferAccessIfNeeded(for: removedTransfers)
         transfers.removeAll { $0.status.isCompletedOrCancelled }
         transferBatches.removeAll { batchIDsToRemove.contains($0.id) }
         transferBadgeState.update(from: transfers)
@@ -433,7 +438,7 @@ final class AppState: ObservableObject {
 
     func clearUnfinishedTransfers() async {
         let removedIDs = await engine.clearUnfinished()
-        endLocalTransferAccessIfNeeded(for: transfers.filter { removedIDs.contains($0.id) })
+        forgetLocalTransferAccessIfNeeded(for: transfers.filter { removedIDs.contains($0.id) })
         transfers.removeAll { removedIDs.contains($0.id) }
         pruneBatchesAfterTaskRemoval()
         transferBadgeState.update(from: transfers)
@@ -441,7 +446,7 @@ final class AppState: ObservableObject {
 
     func clearAllTransfers() async {
         await engine.clearAll()
-        endLocalTransferAccessIfNeeded(for: transfers)
+        forgetLocalTransferAccessIfNeeded(for: transfers)
         transfers.removeAll()
         transferBatches.removeAll()
         transferBadgeState.update(from: transfers)
@@ -450,7 +455,7 @@ final class AppState: ObservableObject {
     func removeTransfers(matching selection: Set<UUID>) async {
         let taskIDs = taskIDs(matching: selection)
         let removedTaskIDs = await engine.remove(ids: taskIDs)
-        endLocalTransferAccessIfNeeded(for: transfers.filter { removedTaskIDs.contains($0.id) })
+        forgetLocalTransferAccessIfNeeded(for: transfers.filter { removedTaskIDs.contains($0.id) })
         transfers.removeAll { removedTaskIDs.contains($0.id) }
         transferBatches.removeAll { selection.contains($0.id) }
         pruneBatchesAfterTaskRemoval()
@@ -567,16 +572,20 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func beginLocalTransferAccessIfNeeded(for task: TransferTask) {
-        guard task.direction == .upload,
-              scopedTransferURLsByTaskID[task.id] == nil else { return }
+    private func beginLocalTransferAccessIfNeeded(for task: TransferTask, securityScopedURL: URL? = nil) {
+        guard task.direction == .upload else { return }
+        if let securityScopedURL {
+            scopedTransferAccessURLsByTaskID[task.id] = securityScopedURL
+        }
+        guard activeScopedTransferURLsByTaskID[task.id] == nil else { return }
         // Must be the exact URL delivered by the open panel / drag-drop.
         // Standardizing resolves symlinks (e.g. /var→/private/var, /tmp,
         // external volumes) into a path the sandbox extension does not
         // cover, which silently denies access for queued uploads.
-        let url = task.localURL
+        let url = scopedTransferAccessURLsByTaskID[task.id] ?? task.localURL
         if url.startAccessingSecurityScopedResource() {
-            scopedTransferURLsByTaskID[task.id] = url
+            scopedTransferAccessURLsByTaskID[task.id] = url
+            activeScopedTransferURLsByTaskID[task.id] = url
         }
     }
 
@@ -587,8 +596,30 @@ final class AppState: ObservableObject {
     }
 
     private func endLocalTransferAccessIfNeeded(for task: TransferTask) {
-        guard let url = scopedTransferURLsByTaskID.removeValue(forKey: task.id) else { return }
+        guard let url = activeScopedTransferURLsByTaskID.removeValue(forKey: task.id) else { return }
         url.stopAccessingSecurityScopedResource()
+    }
+
+    private func forgetLocalTransferAccessIfNeeded(for tasks: [TransferTask]) {
+        for task in tasks {
+            forgetLocalTransferAccessIfNeeded(for: task)
+        }
+    }
+
+    private func forgetLocalTransferAccessIfNeeded(for task: TransferTask) {
+        endLocalTransferAccessIfNeeded(for: task)
+        scopedTransferAccessURLsByTaskID.removeValue(forKey: task.id)
+    }
+
+    private func localFileSize(for localURL: URL, securityScopedURL: URL?) -> Int64 {
+        let didStartAccessing = securityScopedURL?.startAccessingSecurityScopedResource() ?? false
+        defer {
+            if didStartAccessing {
+                securityScopedURL?.stopAccessingSecurityScopedResource()
+            }
+        }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: localURL.path)
+        return (attrs?[.size] as? Int64) ?? 0
     }
 }
 
