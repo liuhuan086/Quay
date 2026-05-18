@@ -207,7 +207,7 @@ final class ServerRepositoryTests: XCTestCase {
 
     override func tearDown() async throws {
         for server in repo.fetchAll() {
-            await repo.delete(server.id)
+            try await repo.delete(server.id)
         }
         UserDefaults.standard.removeObject(forKey: repoKey)
         repo = nil
@@ -215,12 +215,12 @@ final class ServerRepositoryTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func test_saveAndFetch() async {
+    func test_saveAndFetch() async throws {
         let c = makeCfg("Repo Test", password: "secret")
-        await repo.save(c)
+        try await repo.save(c)
         let fetched = repo.fetchAll().first(where: { $0.id == c.id })
         XCTAssertEqual(fetched?.password, "")
-        let resolved = await repo.password(for: c.id)
+        let resolved = try await repo.password(for: c.id)
         XCTAssertEqual(resolved, "secret")
         let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
             String(data: $0, encoding: .utf8)
@@ -229,20 +229,20 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertFalse(persisted.contains("\"password\""))
     }
 
-    func test_update() async {
+    func test_update() async throws {
         var c = makeCfg("Update Test")
-        await repo.save(c)
+        try await repo.save(c)
         c.displayName = "Updated"
-        await repo.update(c)
+        try await repo.update(c)
         XCTAssertEqual(repo.fetchAll().first(where: { $0.id == c.id })?.displayName, "Updated")
     }
 
-    func test_updateLastConnectedPreservesDisplayName() async {
+    func test_updateLastConnectedPreservesDisplayName() async throws {
         var c = makeCfg("192.168.2.4")
-        await repo.save(c)
+        try await repo.save(c)
 
         c.displayName = "Mac"
-        await repo.update(c)
+        try await repo.update(c)
 
         let connectedAt = Date(timeIntervalSince1970: 1_770_000_000)
         await repo.updateLastConnected(for: c.id, at: connectedAt)
@@ -252,19 +252,19 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertEqual(fetched?.lastConnectedAt, connectedAt)
     }
 
-    func test_delete() async {
+    func test_delete() async throws {
         let c = makeCfg("Delete Test")
-        await repo.save(c)
-        await repo.delete(c.id)
+        try await repo.save(c)
+        try await repo.delete(c.id)
         XCTAssertFalse(repo.fetchAll().contains(where: { $0.id == c.id }))
     }
 
     func test_exportImport() async throws {
         let c = makeCfg("Export")
-        await repo.save(c)
+        try await repo.save(c)
         let data = try repo.exportJSON()
         XCTAssertFalse(data.isEmpty)
-        await repo.delete(c.id)
+        try await repo.delete(c.id)
         try await repo.importJSON(data)
         XCTAssertTrue(repo.fetchAll().contains(where: { $0.id == c.id }))
     }
@@ -287,7 +287,7 @@ final class ServerRepositoryTests: XCTestCase {
 
         let fetched = repo.fetchAll()
         XCTAssertEqual(fetched.first?.password, "")
-        let resolved = await repo.password(for: id)
+        let resolved = try await repo.password(for: id)
         XCTAssertEqual(resolved, "legacy-secret")
         XCTAssertEqual(try KeychainManager.shared.getPassword(for: id.uuidString), "legacy-secret")
 
@@ -324,10 +324,10 @@ final class ServerRepositoryTests: XCTestCase {
 
         // On-demand lookup for the first server (before any bulk migration)
         // must not erase the second server's still-unmigrated password.
-        let one = await repo.password(for: id1)
+        let one = try await repo.password(for: id1)
         XCTAssertEqual(one, "secret-one")
 
-        let two = await repo.password(for: id2)
+        let two = try await repo.password(for: id2)
         XCTAssertEqual(two, "secret-two")
         XCTAssertEqual(try KeychainManager.shared.getPassword(for: id2.uuidString), "secret-two")
 
@@ -338,7 +338,7 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertFalse(persisted.contains("secret-two"))
     }
 
-    func test_unrelatedSaveDoesNotDropUnmigratedLegacyPassword() async {
+    func test_unrelatedSaveDoesNotDropUnmigratedLegacyPassword() async throws {
         let legacyID = UUID()
         let legacyJSON = """
         [{
@@ -354,13 +354,13 @@ final class ServerRepositoryTests: XCTestCase {
             KeychainManager.shared.deletePassword(for: legacyID.uuidString)
         }
 
-        await repo.save(makeCfg("New Server", password: "new-secret"))
+        try await repo.save(makeCfg("New Server", password: "new-secret"))
 
-        let resolved = await repo.password(for: legacyID)
+        let resolved = try await repo.password(for: legacyID)
         XCTAssertEqual(resolved, "legacy-secret")
     }
 
-    func test_deletePasswordRemovesLegacyPlaintextPassword() async {
+    func test_deletePasswordRemovesLegacyPlaintextPassword() async throws {
         let legacyID = UUID()
         let legacyJSON = """
         [{
@@ -376,9 +376,9 @@ final class ServerRepositoryTests: XCTestCase {
             KeychainManager.shared.deletePassword(for: legacyID.uuidString)
         }
 
-        await repo.deletePassword(for: legacyID)
+        try await repo.deletePassword(for: legacyID)
 
-        let resolved = await repo.password(for: legacyID)
+        let resolved = try await repo.password(for: legacyID)
         XCTAssertEqual(resolved, "")
         let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
             String(data: $0, encoding: .utf8)
@@ -396,7 +396,7 @@ final class ServerRepositoryTests: XCTestCase {
         func deletePassword(for key: String) -> Bool { true }
     }
 
-    func test_unrelatedWritePreservesLegacyWhenKeychainMigrationFails() async {
+    func test_unrelatedWritePreservesLegacyWhenKeychainMigrationFails() async throws {
         let failKey = "swiftftp.tests.failkc.\(UUID().uuidString)"
         let repo = ServerRepository(key: failKey, keychain: AlwaysFailingKeychain())
         defer { UserDefaults.standard.removeObject(forKey: failKey) }
@@ -412,11 +412,11 @@ final class ServerRepositoryTests: XCTestCase {
         UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: failKey)
 
         // Unrelated write while every Keychain migration write fails.
-        await repo.save(makeCfg("New", password: "new-secret"))
+        try await repo.save(makeCfg("New"))
 
         // Keychain holds nothing, so both pending legacy plaintexts must survive.
-        let a = await repo.password(for: idA)
-        let b = await repo.password(for: idB)
+        let a = try await repo.password(for: idA)
+        let b = try await repo.password(for: idB)
         XCTAssertEqual(a, "secret-A")
         XCTAssertEqual(b, "secret-B")
 
@@ -427,10 +427,29 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertTrue(persisted.contains("secret-B"))
     }
 
-    func test_sortedByDisplayName() async {
+    func test_newPasswordSaveFailsWhenKeychainWriteFails() async {
+        let failKey = "swiftftp.tests.failkc.\(UUID().uuidString)"
+        let repo = ServerRepository(key: failKey, keychain: AlwaysFailingKeychain())
+        defer { UserDefaults.standard.removeObject(forKey: failKey) }
+
+        do {
+            try await repo.save(makeCfg("New", password: "new-secret"))
+            XCTFail("Expected Keychain write failure to abort the save")
+        } catch {
+            // Expected: never report a saved credential unless Keychain accepted it.
+        }
+
+        XCTAssertTrue(repo.fetchAll().isEmpty)
+        let persisted = UserDefaults.standard.data(forKey: failKey).flatMap {
+            String(data: $0, encoding: .utf8)
+        } ?? ""
+        XCTAssertFalse(persisted.contains("new-secret"))
+    }
+
+    func test_sortedByDisplayName() async throws {
         let b = makeCfg("B-Server")
         let a = makeCfg("A-Server")
-        await repo.save(b); await repo.save(a)
+        try await repo.save(b); try await repo.save(a)
         let all = repo.fetchAll()
         let names = all.map { $0.displayName }
         if let ai = names.firstIndex(of: "A-Server"), let bi = names.firstIndex(of: "B-Server") {
@@ -438,16 +457,17 @@ final class ServerRepositoryTests: XCTestCase {
         }
     }
 
-    func test_concurrentSavesPreserveAllServers() async {
+    func test_concurrentSavesPreserveAllServers() async throws {
         let configs = (0..<25).map { makeCfg("Concurrent \($0)") }
         let repo = self.repo!
 
-        await withTaskGroup(of: Void.self) { group in
+        try await withThrowingTaskGroup(of: Void.self) { group in
             for config in configs {
                 group.addTask {
-                    await repo.save(config)
+                    try await repo.save(config)
                 }
             }
+            try await group.waitForAll()
         }
 
         let savedIDs = Set(repo.fetchAll().map(\.id))
@@ -653,16 +673,16 @@ final class PerformanceTests: XCTestCase {
         }
     }
 
-    func test_repository_fetchAll_performance() async {
+    func test_repository_fetchAll_performance() async throws {
         let key = "swiftftp.tests.performance.\(UUID().uuidString)"
         let repo = ServerRepository(key: key)
         // Pre-populate
         let configs = (0..<20).map {
             ServerConfig(displayName: "Server \($0)", host: "host\($0).com", username: "u")
         }
-        for c in configs { await repo.save(c) }
+        for c in configs { try await repo.save(c) }
         measure { _ = repo.fetchAll() }
-        for c in configs { await repo.delete(c.id) }
+        for c in configs { try await repo.delete(c.id) }
         UserDefaults.standard.removeObject(forKey: key)
     }
 }

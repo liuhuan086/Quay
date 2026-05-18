@@ -24,20 +24,20 @@ final class ServerRepository: @unchecked Sendable {
         await store.migrateLegacyPasswordsIfNeeded()
     }
 
-    func password(for id: UUID) async -> String {
-        await store.password(for: id)
+    func password(for id: UUID) async throws -> String {
+        try await store.password(for: id)
     }
 
-    func deletePassword(for id: UUID) async {
-        await store.deletePassword(for: id)
+    func deletePassword(for id: UUID) async throws {
+        try await store.deletePassword(for: id)
     }
 
-    func save(_ c: ServerConfig, credentialPolicy: CredentialPolicy = .replace) async {
-        await store.save(c, credentialPolicy: credentialPolicy)
+    func save(_ c: ServerConfig, credentialPolicy: CredentialPolicy = .replace) async throws {
+        try await store.save(c, credentialPolicy: credentialPolicy)
     }
 
-    func update(_ c: ServerConfig, credentialPolicy: CredentialPolicy = .replaceIfNonEmpty) async {
-        await store.update(c, credentialPolicy: credentialPolicy)
+    func update(_ c: ServerConfig, credentialPolicy: CredentialPolicy = .replaceIfNonEmpty) async throws {
+        try await store.update(c, credentialPolicy: credentialPolicy)
     }
 
     @discardableResult
@@ -45,8 +45,8 @@ final class ServerRepository: @unchecked Sendable {
         await store.updateLastConnected(for: id, at: date)
     }
 
-    func delete(_ id: UUID) async {
-        await store.delete(id)
+    func delete(_ id: UUID) async throws {
+        try await store.delete(id)
     }
 
     func exportJSON() throws -> Data {
@@ -162,29 +162,45 @@ final class ServerRepository: @unchecked Sendable {
             }
         }
 
-        func password(for id: UUID) -> String {
+        func password(for id: UUID) throws -> String {
             let account = credentialAccount(for: id)
-            if let password = try? keychain.getPassword(for: account) {
-                return password
+            var readError: Error?
+            do {
+                if let password = try keychain.getPassword(for: account) {
+                    return password
+                }
+            } catch {
+                readError = error
             }
 
             // No Keychain entry yet — run the all-or-nothing legacy migration
             // (never a per-entry persist, which would drop other legacy
             // credentials), then read back.
             migrateLegacyPasswordsIfNeeded()
-            if let password = try? keychain.getPassword(for: account) {
-                return password
+            do {
+                if let password = try keychain.getPassword(for: account) {
+                    return password
+                }
+            } catch {
+                readError = error
             }
 
             // Migration could not reach the Keychain (e.g. locked). Fall back
             // to the still-present legacy plaintext so the connection can
             // proceed, without mutating storage.
-            return loadList().first(where: { $0.id == id })?.password ?? ""
+            if let legacyPassword = loadList().first(where: { $0.id == id })?.password,
+               !legacyPassword.isEmpty {
+                return legacyPassword
+            }
+            if let readError { throw readError }
+            return ""
         }
 
-        func deletePassword(for id: UUID) {
+        func deletePassword(for id: UUID) throws {
             let existing = loadList()
-            keychain.deletePassword(for: credentialAccount(for: id))
+            guard keychain.deletePassword(for: credentialAccount(for: id)) else {
+                throw ServerRepositoryError.keychainDeleteFailed
+            }
             var all = existing
             if let index = all.firstIndex(where: { $0.id == id }) {
                 all[index].password = ""
@@ -192,10 +208,15 @@ final class ServerRepository: @unchecked Sendable {
             }
         }
 
-        func save(_ config: ServerConfig, credentialPolicy: CredentialPolicy) {
+        func save(_ config: ServerConfig, credentialPolicy: CredentialPolicy) throws {
             migrateLegacyPasswordsIfNeeded()
             let existing = loadList()
-            persistCredential(for: config, policy: credentialPolicy)
+            let replacingExisting = existing.contains { $0.id == config.id }
+            try persistCredential(
+                for: config,
+                policy: credentialPolicy,
+                shouldDeleteEmptyCredential: replacingExisting
+            )
             var all = existing
             var stored = config
             stored.password = ""
@@ -211,8 +232,8 @@ final class ServerRepository: @unchecked Sendable {
             )
         }
 
-        func update(_ config: ServerConfig, credentialPolicy: CredentialPolicy) {
-            save(config, credentialPolicy: credentialPolicy)
+        func update(_ config: ServerConfig, credentialPolicy: CredentialPolicy) throws {
+            try save(config, credentialPolicy: credentialPolicy)
         }
 
         @discardableResult
@@ -227,9 +248,11 @@ final class ServerRepository: @unchecked Sendable {
             return updated
         }
 
-        func delete(_ id: UUID) {
+        func delete(_ id: UUID) throws {
             let existing = loadList()
-            keychain.deletePassword(for: credentialAccount(for: id))
+            guard keychain.deletePassword(for: credentialAccount(for: id)) else {
+                throw ServerRepositoryError.keychainDeleteFailed
+            }
             var all = existing
             all.removeAll { $0.id == id }
             persist(all, preservingLegacyPasswordsFrom: existing, strippingLegacyPasswordFor: [id])
@@ -242,7 +265,7 @@ final class ServerRepository: @unchecked Sendable {
             var all = existing
             var strippedIDs: Set<UUID> = []
             for config in incoming where !all.contains(where: { $0.id == config.id }) {
-                persistCredential(for: config, policy: .replace)
+                try persistCredential(for: config, policy: .replace, shouldDeleteEmptyCredential: false)
                 var stored = config
                 stored.password = ""
                 all.append(stored)
@@ -268,7 +291,11 @@ final class ServerRepository: @unchecked Sendable {
             )
         }
 
-        private func persistCredential(for config: ServerConfig, policy: CredentialPolicy) {
+        private func persistCredential(
+            for config: ServerConfig,
+            policy: CredentialPolicy,
+            shouldDeleteEmptyCredential: Bool
+        ) throws {
             switch policy {
             case .preserve:
                 return
@@ -280,9 +307,12 @@ final class ServerRepository: @unchecked Sendable {
 
             let account = credentialAccount(for: config.id)
             if config.password.isEmpty {
-                keychain.deletePassword(for: account)
+                guard shouldDeleteEmptyCredential else { return }
+                guard keychain.deletePassword(for: account) else {
+                    throw ServerRepositoryError.keychainDeleteFailed
+                }
             } else {
-                try? keychain.savePassword(config.password, for: account, label: config.displayName)
+                try keychain.savePassword(config.password, for: account, label: config.displayName)
             }
         }
 
@@ -299,6 +329,17 @@ final class ServerRepository: @unchecked Sendable {
             case .replace:
                 return [config.id]
             }
+        }
+    }
+}
+
+enum ServerRepositoryError: LocalizedError {
+    case keychainDeleteFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .keychainDeleteFailed:
+            return "Keychain 删除失败，请检查应用的沙盒与 Keychain 权限后重试。"
         }
     }
 }

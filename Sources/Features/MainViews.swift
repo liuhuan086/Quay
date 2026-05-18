@@ -80,8 +80,9 @@ struct RootView: View {
         )) {
             ServerEditView(config: nil, servers: appState.servers) { cfg in
                 Task {
-                    await appState.saveServer(cfg)
-                    await appState.connect(to: cfg)
+                    if await appState.saveServer(cfg) {
+                        await appState.connect(to: cfg)
+                    }
                 }
             }
         }

@@ -107,13 +107,20 @@ final class AppState: ObservableObject {
         hasSeenOnboarding = false
     }
 
-    func saveServer(_ config: ServerConfig) async {
+    @discardableResult
+    func saveServer(_ config: ServerConfig) async -> Bool {
         guard hasFullAccess || servers.contains(where: { $0.id == config.id }) else {
             alertItem = AlertItem(title: "试用已结束", message: "请购买 Pro 后保存服务器配置。")
-            return
+            return false
         }
-        await repository.save(config, credentialPolicy: .replace)
-        loadServers()
+        do {
+            try await repository.save(config, credentialPolicy: .replace)
+            loadServers()
+            return true
+        } catch {
+            showError(error)
+            return false
+        }
     }
 
     var hasFullAccess: Bool {
@@ -150,25 +157,38 @@ final class AppState: ObservableObject {
     }
 
     func updateServer(_ config: ServerConfig) async {
-        await repository.update(config, credentialPolicy: .replaceIfNonEmpty)
-        if !config.password.isEmpty {
-            await ConnectionPoolRegistry.shared.updateCachedPassword(config.password, forServerID: config.id)
+        do {
+            try await repository.update(config, credentialPolicy: .replaceIfNonEmpty)
+            if !config.password.isEmpty {
+                await ConnectionPoolRegistry.shared.updateCachedPassword(config.password, forServerID: config.id)
+            }
+            loadServers()
+        } catch {
+            showError(error)
         }
-        loadServers()
     }
 
     func clearSavedPasswords() async {
         let serverIDs = servers.map(\.id)
-        for id in serverIDs {
-            await repository.deletePassword(for: id)
-            await ConnectionPoolRegistry.shared.updateCachedPassword("", forServerID: id)
+        do {
+            for id in serverIDs {
+                try await repository.deletePassword(for: id)
+                await ConnectionPoolRegistry.shared.updateCachedPassword("", forServerID: id)
+            }
+            loadServers()
+        } catch {
+            showError(error)
         }
-        loadServers()
     }
 
     func deleteServer(_ config: ServerConfig) async {
         await ConnectionPoolRegistry.shared.removePool(for: config.id)
-        await repository.delete(config.id)
+        do {
+            try await repository.delete(config.id)
+        } catch {
+            showError(error)
+            return
+        }
         connectionStates.removeValue(forKey: config.id)
         syncWatchers = syncWatchers.filter { $0.value.serverID != config.id }
         persistSyncWatchers()
@@ -240,7 +260,7 @@ final class AppState: ObservableObject {
         do {
             var connectionConfig = server
             if connectionConfig.password.isEmpty {
-                connectionConfig.password = await repository.password(for: server.id)
+                connectionConfig.password = try await repository.password(for: server.id)
             }
             let pool = await ConnectionPoolRegistry.shared.pool(for: connectionConfig, maxSize: 5)
             let client = try await pool.borrowClient(password: connectionConfig.password)
@@ -315,6 +335,11 @@ final class AppState: ObservableObject {
 
     // MARK: - Alerts
     func showError(_ error: Error) {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription {
+            alertItem = AlertItem(title: "错误", message: description)
+            return
+        }
         let friendly = FTPError.friendly(error)
         alertItem = AlertItem(title: "错误", message: friendly.errorDescription ?? error.localizedDescription)
     }
