@@ -147,6 +147,8 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                 }
             }
             return results
+        } catch let error as CancellationError {
+            throw error
         } catch {
             throw FTPError.friendly(error)
         }
@@ -157,6 +159,8 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
         let sftp = try getSFTP()
         do {
             try await sftp.createDirectory(atPath: path)
+        } catch let error as CancellationError {
+            throw error
         } catch {
             throw FTPError.friendly(error)
         }
@@ -257,6 +261,8 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                 }
             }
             onProgress(TransferProgress(bytesTransferred: total, totalBytes: total, bytesPerSecond: 0))
+        } catch let error as CancellationError {
+            throw error
         } catch {
             throw FTPError.friendly(error)
         }
@@ -330,6 +336,8 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
             }
 
             onProgress(TransferProgress(bytesTransferred: total, totalBytes: total, bytesPerSecond: 0))
+        } catch let error as CancellationError {
+            throw error
         } catch {
             throw FTPError.friendly(error)
         }
