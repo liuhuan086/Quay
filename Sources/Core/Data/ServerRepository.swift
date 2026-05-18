@@ -83,10 +83,17 @@ final class ServerRepository: @unchecked Sendable {
         for config in existing where !config.password.isEmpty {
             legacyPasswords[config.id] = config.password
         }
+        // A non-empty password in `list` only ever originates from an
+        // unmigrated legacy plaintext copied out of `existing` (every other
+        // path blanks it). Preserve it for any id that still has a pending
+        // legacy credential and is not being explicitly stripped; blank the
+        // rest. The new entry's emptiness must NOT gate this — an untouched
+        // legacy entry carries its plaintext into `list`, and requiring
+        // emptiness would push it into the else branch and destroy the only
+        // remaining copy whenever Keychain migration has not yet succeeded.
         var sanitized = list
         for i in sanitized.indices {
-            if sanitized[i].password.isEmpty,
-               !strippedIDs.contains(sanitized[i].id),
+            if !strippedIDs.contains(sanitized[i].id),
                let legacyPassword = legacyPasswords[sanitized[i].id] {
                 sanitized[i].password = legacyPassword
             } else {
