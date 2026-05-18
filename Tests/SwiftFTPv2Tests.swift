@@ -100,10 +100,18 @@ final class TransferTaskTests: XCTestCase {
         }
     }
 
-    private func makeTask(size: Int64 = 1_048_576) -> TransferTask {
+    func test_transferFailureAlertPresentation_manualTransfer() {
+        XCTAssertTrue(AppState.shouldPresentTransferFailureAlert(for: makeTask()))
+    }
+
+    func test_transferFailureAlertPresentation_autoSync() {
+        XCTAssertFalse(AppState.shouldPresentTransferFailureAlert(for: makeTask(isAutoSync: true)))
+    }
+
+    private func makeTask(size: Int64 = 1_048_576, isAutoSync: Bool = false) -> TransferTask {
         TransferTask(serverID: UUID(), serverName: "Test", direction: .upload,
                      localURL: URL(fileURLWithPath: "/tmp/test.dat"),
-                     remotePath: "/remote/test.dat", fileSize: size)
+                     remotePath: "/remote/test.dat", fileSize: size, isAutoSync: isAutoSync)
     }
 }
 
@@ -485,6 +493,40 @@ final class ContinuationBoxTests: XCTestCase {
 
 // MARK: - ConnectionPool Tests
 final class ConnectionPoolTests: XCTestCase {
+
+    func test_effectivePassword_prefersRequestedPassword() {
+        XCTAssertEqual(
+            ConnectionPool.effectivePassword(requested: "keychain-secret", fallback: "server-secret"),
+            "keychain-secret"
+        )
+    }
+
+    func test_effectivePassword_fallsBackToServerPassword() {
+        XCTAssertEqual(
+            ConnectionPool.effectivePassword(requested: "", fallback: "server-secret"),
+            "server-secret"
+        )
+    }
+
+    func test_updatedKnownPassword_recordsSuccessfulPassword() {
+        XCTAssertEqual(
+            ConnectionPool.updatedKnownPassword(
+                afterSuccessfulConnection: "connected-secret",
+                current: ""
+            ),
+            "connected-secret"
+        )
+    }
+
+    func test_updatedKnownPassword_keepsCurrentWhenSuccessfulPasswordEmpty() {
+        XCTAssertEqual(
+            ConnectionPool.updatedKnownPassword(
+                afterSuccessfulConnection: "",
+                current: "server-secret"
+            ),
+            "server-secret"
+        )
+    }
 
     func test_pool_creates_connection_up_to_max() async throws {
         // Can't easily test with real FTP server in unit tests.

@@ -412,12 +412,12 @@ final class AppState: ObservableObject {
             } catch where Self.isRemoteMissingPathError(error) {
                 resolvedPath = targetRemotePath
             }
-            await cleanupStaleManagedMirrorTrashIfDue(
+            _ = await cleanupStaleManagedMirrorTrashIfDue(
                 watcher: watcher,
                 marker: marker,
                 using: client
             )
-            await cleanupStaleSwiftFTPTempFilesIfDue(
+            _ = await cleanupStaleSwiftFTPTempFilesIfDue(
                 watcher: watcher,
                 marker: marker,
                 using: client
@@ -839,6 +839,9 @@ final class AppState: ObservableObject {
         remotePath: String,
         isAutoSync: Bool = false
     ) async {
+        let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+        await pool.rememberPassword(server.password)
+
         let attrs = try? FileManager.default.attributesOfItem(atPath: localURL.path)
         let size  = (attrs?[.size] as? Int64) ?? 0
         let task  = TransferTask(
@@ -876,8 +879,10 @@ final class AppState: ObservableObject {
                 },
                 onFailure: { [weak self] task in
                     Task { @MainActor [weak self] in
-                        guard case .failed(let message) = task.status else { return }
-                        self?.alertItem = AlertItem(
+                        guard let self,
+                              case .failed(let message) = task.status,
+                              Self.shouldPresentTransferFailureAlert(for: task) else { return }
+                        self.alertItem = AlertItem(
                             title: "传输失败",
                             message: "\(task.fileName)：\(message)"
                         )
@@ -885,6 +890,10 @@ final class AppState: ObservableObject {
                 }
             )
         }
+    }
+
+    nonisolated static func shouldPresentTransferFailureAlert(for task: TransferTask) -> Bool {
+        !task.isAutoSync
     }
 
     private func cleanupStaleSwiftFTPTempFilesAfterAutoUpload(_ task: TransferTask) {

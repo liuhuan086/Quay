@@ -22,12 +22,14 @@ actor ConnectionPool {
     // MARK: State
     private var entries: [PoolEntry] = []
     private var waiters: [CheckedContinuation<any AnyFTPClient, Error>] = []
+    private var lastKnownPassword: String
 
     // MARK: Init
     init(serverConfig: ServerConfig, maxSize: Int = 5, idleTimeout: TimeInterval = 120) {
         self.serverConfig = serverConfig
         self.maxSize      = maxSize
         self.idleTimeout  = idleTimeout
+        self.lastKnownPassword = serverConfig.password
     }
 
     // MARK: - Borrow a connection
@@ -60,10 +62,18 @@ actor ConnectionPool {
             // 2. Pool not full — reserve a slot synchronously, then connect.
             if entries.count < maxSize {
                 let client = ClientFactory.makeClient(for: serverConfig)
+                let connectionPassword = Self.effectivePassword(
+                    requested: password,
+                    fallback: lastKnownPassword
+                )
                 let placeholder = PoolEntry(client: client, inUse: true, lastUsed: Date())
                 entries.append(placeholder)
                 do {
-                    try await client.connect(password: password)
+                    try await client.connect(password: connectionPassword)
+                    lastKnownPassword = Self.updatedKnownPassword(
+                        afterSuccessfulConnection: connectionPassword,
+                        current: lastKnownPassword
+                    )
                     return client
                 } catch {
                     if let i = entries.firstIndex(where: { $0.client === (client as AnyObject) }) {
@@ -78,6 +88,21 @@ actor ConnectionPool {
                 waiters.append(cont)
             }
         }
+    }
+
+    static func effectivePassword(requested password: String, fallback: String) -> String {
+        password.isEmpty ? fallback : password
+    }
+
+    static func updatedKnownPassword(afterSuccessfulConnection password: String, current: String) -> String {
+        password.isEmpty ? current : password
+    }
+
+    func rememberPassword(_ password: String) {
+        lastKnownPassword = Self.updatedKnownPassword(
+            afterSuccessfulConnection: password,
+            current: lastKnownPassword
+        )
     }
 
     // MARK: - Return a connection
