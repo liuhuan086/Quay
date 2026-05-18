@@ -40,6 +40,7 @@ struct FileBrowserView: View {
         let fileName: String
         let fileSize: Int64?
         let batchID: UUID?
+        let securityScopedURL: URL?
     }
 
     struct DirectoryPreparation {
@@ -479,11 +480,16 @@ struct FileBrowserView: View {
         var plan = TransferPlan()
 
         for url in urls {
+            let didStartAccessing = url.startAccessingSecurityScopedResource()
             let itemPlan = await uploadPlan(
                 for: url,
                 destinationDirectory: remoteVM.currentPath,
-                cache: cache
+                cache: cache,
+                securityScopedURL: url
             )
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
             plan.merge(itemPlan)
         }
 
@@ -494,7 +500,8 @@ struct FileBrowserView: View {
     private func uploadPlan(
         for localURL: URL,
         destinationDirectory: String,
-        cache: RemoteDirectoryCache
+        cache: RemoteDirectoryCache,
+        securityScopedURL: URL?
     ) async -> TransferPlan {
         var plan = TransferPlan()
         let isDirectory = localURLIsDirectory(localURL)
@@ -520,7 +527,8 @@ struct FileBrowserView: View {
                     remoteDirectoryPath: destinationPath,
                     remoteDirectoryExists: existing?.isDirectory == true,
                     batchID: batchID,
-                    cache: cache
+                    cache: cache,
+                    securityScopedURL: securityScopedURL
                 )
                 appState.finishTransferBatch(id: batchID, expectedFileCount: result.fileCount)
                 plan.merge(result.plan)
@@ -531,7 +539,8 @@ struct FileBrowserView: View {
                     direction: .upload,
                     fileName: localURL.lastPathComponent,
                     fileSize: localFileSize(localURL),
-                    batchID: nil
+                    batchID: nil,
+                    securityScopedURL: securityScopedURL
                 )
                 if let existing {
                     if existing.isDirectory {
@@ -560,7 +569,8 @@ struct FileBrowserView: View {
         remoteDirectoryPath: String,
         remoteDirectoryExists: Bool,
         batchID: UUID,
-        cache: RemoteDirectoryCache
+        cache: RemoteDirectoryCache,
+        securityScopedURL: URL?
     ) async -> DirectoryPlanResult {
         var result = DirectoryPlanResult()
         result.plan.directories.append(
@@ -605,7 +615,8 @@ struct FileBrowserView: View {
                     remoteDirectoryPath: childRemotePath,
                     remoteDirectoryExists: existing?.isDirectory == true,
                     batchID: batchID,
-                    cache: cache
+                    cache: cache,
+                    securityScopedURL: securityScopedURL
                 )
                 result.fileCount += childResult.fileCount
                 result.plan.merge(childResult.plan)
@@ -617,7 +628,8 @@ struct FileBrowserView: View {
                     direction: .upload,
                     fileName: name,
                     fileSize: localFileSize(childURL),
-                    batchID: batchID
+                    batchID: batchID,
+                    securityScopedURL: securityScopedURL
                 )
                 if let existing {
                     if existing.isDirectory {
@@ -709,7 +721,8 @@ struct FileBrowserView: View {
                 direction: .download,
                 fileName: item.name,
                 fileSize: item.size,
-                batchID: nil
+                batchID: nil,
+                securityScopedURL: nil
             )
             switch localDestinationState(for: localURL) {
             case .directory:
@@ -759,7 +772,8 @@ struct FileBrowserView: View {
                         direction: .download,
                         fileName: child.name,
                         fileSize: child.size,
-                        batchID: batchID
+                        batchID: batchID,
+                        securityScopedURL: nil
                     )
                     switch localDestinationState(for: childLocalURL) {
                     case .directory:
@@ -797,6 +811,7 @@ struct FileBrowserView: View {
         await prepareDirectories(plan.directories)
 
         let acceptedRequests = plan.ready + (includingConflicts ? plan.conflicts : [])
+        updateBatchExpectedCounts(for: plan, acceptedRequests: acceptedRequests)
         for request in acceptedRequests {
             await appState.enqueue(
                 server: server,
@@ -804,7 +819,8 @@ struct FileBrowserView: View {
                 localURL: request.localURL,
                 remotePath: request.remotePath,
                 fileSize: request.fileSize,
-                batchID: request.batchID
+                batchID: request.batchID,
+                securityScopedURL: request.securityScopedURL
             )
         }
 
@@ -812,6 +828,23 @@ struct FileBrowserView: View {
             appState.discardEmptyTransferBatches(ids: plan.conflictBatchIDs)
         }
         showTransferPlanWarnings(plan.blockedMessages)
+    }
+
+    private func updateBatchExpectedCounts(
+        for plan: TransferPlan,
+        acceptedRequests: [TransferRequest]
+    ) {
+        var acceptedCountsByBatchID: [UUID: Int] = [:]
+        for request in acceptedRequests {
+            guard let batchID = request.batchID else { continue }
+            acceptedCountsByBatchID[batchID, default: 0] += 1
+        }
+        for batchID in plan.allBatchIDs {
+            appState.finishTransferBatch(
+                id: batchID,
+                expectedFileCount: acceptedCountsByBatchID[batchID, default: 0]
+            )
+        }
     }
 
     @MainActor
