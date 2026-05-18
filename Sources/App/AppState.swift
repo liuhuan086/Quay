@@ -58,6 +58,7 @@ final class AppState: ObservableObject {
     private let trialStartedAtKey = "trialStartedAt"
     private let trialLength: TimeInterval = 7 * 24 * 60 * 60
     private var managedMirrorTrashCleanupRuns: [UUID: Date] = [:]
+    private var swiftFTPTempCleanupRuns: [UUID: Date] = [:]
 
     // Transfer engine (actor)
     let engine = TransferEngine()
@@ -416,6 +417,11 @@ final class AppState: ObservableObject {
                 marker: marker,
                 using: client
             )
+            await cleanupStaleSwiftFTPTempFilesIfDue(
+                watcher: watcher,
+                marker: marker,
+                using: client
+            )
             return resolvedPath
         } catch {
             pauseMirrorWatcher(watcher, reason: error)
@@ -548,6 +554,113 @@ final class AppState: ObservableObject {
             try await client.delete(path: path, isDirectory: isDirectory)
         } catch where Self.isRemoteMissingPathError(error) {
         }
+    }
+
+    @discardableResult
+    func cleanupStaleSwiftFTPTempFiles(
+        server: ServerConfig,
+        watcher: SyncWatcher,
+        now: Date = Date(),
+        force: Bool = false
+    ) async -> Int {
+        do {
+            let pool = await ConnectionPoolRegistry.shared.pool(for: server, maxSize: 5)
+            let client = try await pool.borrowClient(password: server.password)
+            defer { Task { await pool.returnClient(client) } }
+
+            let marker = try await readManagedMirrorRootMarker(
+                remoteRoot: watcher.remotePath,
+                using: client
+            )
+            try ManagedMirrorRoot.validate(marker: marker, for: watcher)
+            return await cleanupStaleSwiftFTPTempFilesIfDue(
+                watcher: watcher,
+                marker: marker,
+                using: client,
+                now: now,
+                force: force
+            )
+        } catch {
+            return 0
+        }
+    }
+
+    private func cleanupStaleSwiftFTPTempFilesIfDue(
+        watcher: SyncWatcher,
+        marker: ManagedMirrorRootMarker,
+        using client: any AnyFTPClient,
+        now: Date = Date(),
+        force: Bool = false
+    ) async -> Int {
+        guard force || SwiftFTPTempCleanupPolicy.isDue(
+            lastRun: swiftFTPTempCleanupRuns[watcher.id],
+            now: now
+        ) else {
+            return 0
+        }
+        swiftFTPTempCleanupRuns[watcher.id] = now
+        do {
+            return try await deleteStaleSwiftFTPTempFiles(
+                remoteRoot: watcher.remotePath,
+                marker: marker,
+                using: client,
+                now: now
+            )
+        } catch {
+            return 0
+        }
+    }
+
+    private func deleteStaleSwiftFTPTempFiles(
+        remoteRoot: String,
+        marker: ManagedMirrorRootMarker,
+        using client: any AnyFTPClient,
+        now: Date
+    ) async throws -> Int {
+        var scanned = 0
+        var tempItems: [RemoteFileItem] = []
+
+        func walk(_ path: String) async throws {
+            let items: [RemoteFileItem]
+            do {
+                items = try await client.listDirectory(path)
+            } catch where Self.isRemoteMissingDirectoryError(error) {
+                return
+            }
+
+            for item in items where item.name != "." && item.name != ".." {
+                scanned += 1
+                guard scanned <= SwiftFTPTempCleanupPolicy.maxScannedItems else {
+                    throw FTPError.unsupported("远程临时文件清理扫描超过 \(SwiftFTPTempCleanupPolicy.maxScannedItems) 项，已跳过本次清理。")
+                }
+                try ManagedMirrorRoot.validateDestructiveTarget(item.path, for: marker)
+
+                if item.isDirectory {
+                    guard item.name != ManagedMirrorRoot.trashDirectoryName,
+                          !SwiftFTPTempFile.isTemporaryFileName(item.name) else {
+                        continue
+                    }
+                    try await walk(item.path)
+                } else if SwiftFTPTempFile.isTemporaryFileName(item.name) {
+                    tempItems.append(item)
+                }
+            }
+        }
+
+        try await walk(remoteRoot)
+        let candidates = SwiftFTPTempCleanupPolicy.cleanupCandidates(from: tempItems, now: now)
+        var deleted = 0
+        for candidate in candidates {
+            do {
+                try ManagedMirrorRoot.validateTempCleanupTarget(candidate.path, for: marker)
+                try await client.delete(path: candidate.path, isDirectory: false)
+                deleted += 1
+            } catch where Self.isRemoteMissingPathError(error) {
+            } catch {
+                continue
+            }
+        }
+        return deleted
     }
 
     private func writeManagedMirrorRootMarker(
@@ -754,9 +867,11 @@ final class AppState: ObservableObject {
                 },
                 onComplete: { [weak self] task in
                     Task { @MainActor [weak self] in
-                        self?.notifications.sendTransferComplete(
+                        guard let self else { return }
+                        self.notifications.sendTransferComplete(
                             fileName: task.fileName, direction: task.direction)
-                        self?.lastCompletedTransferServerID = task.serverID
+                        self.lastCompletedTransferServerID = task.serverID
+                        self.cleanupStaleSwiftFTPTempFilesAfterAutoUpload(task)
                     }
                 },
                 onFailure: { [weak self] task in
@@ -769,6 +884,25 @@ final class AppState: ObservableObject {
                     }
                 }
             )
+        }
+    }
+
+    private func cleanupStaleSwiftFTPTempFilesAfterAutoUpload(_ task: TransferTask) {
+        guard task.isAutoSync,
+              task.direction == .upload,
+              let server = servers.first(where: { $0.id == task.serverID }) else {
+            return
+        }
+        let managedWatchers = syncWatchers.values.filter {
+            $0.serverID == task.serverID &&
+                $0.mode == .oneWayMirror &&
+                $0.mirrorDeleteEnabled &&
+                ManagedMirrorRoot.contains(task.remotePath, inRemoteRoot: $0.remotePath)
+        }
+        for watcher in managedWatchers {
+            Task { [weak self] in
+                await self?.cleanupStaleSwiftFTPTempFiles(server: server, watcher: watcher)
+            }
         }
     }
 

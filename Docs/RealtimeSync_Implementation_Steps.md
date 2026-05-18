@@ -94,7 +94,7 @@ Status:
 
 - Upload tasks write to `<filename>.__swiftftp_tmp__` and then rename into place.
 - SwiftFTP temp names are skipped by realtime watchers, local snapshots, remote snapshots, and default excludes.
-- Stale temp cleanup remains future work because destructive cleanup must be scoped to a managed root.
+- Stale temp cleanup shipped in Step 13, scoped to verified managed mirror roots.
 
 Scope:
 
@@ -276,3 +276,24 @@ Acceptance:
 - Unit tests cover timestamp parsing, retention, cap ordering, cadence, and timestamp-root containment.
 - Cleanup cannot permanently delete normal remote files outside SwiftFTP's rule-specific trash folders.
 - Mirror delete behavior remains source-authoritative: A deletes may quarantine B, B changes never delete A.
+
+## Step 13: Stale SwiftFTP Temp Cleanup
+
+Status:
+
+- Managed mirror rules can clean stale `.__swiftftp_tmp__` files after successful auto-sync uploads or mirror quarantine operations.
+- Cleanup only runs after the mirror marker validates, and only inside the verified managed mirror root.
+- Default policy keeps temp files for 7 days, runs at most once every 6 hours per rule, scans at most 10,000 remote items, and deletes at most 50 files per pass.
+- Temp files without a remote modification time are ignored rather than guessed.
+
+Scope:
+
+- Keep cleanup limited to SwiftFTP-owned temp file names.
+- Do not clean arbitrary files, directories, or temp-looking files outside the managed root.
+- Cleanup failure must not fail an otherwise successful upload or quarantine operation.
+
+Acceptance:
+
+- Unit tests cover temp candidate filtering, retention, cap ordering, cadence, and managed-root temp target validation.
+- Cleanup validates both the temp path and restored final path before deletion.
+- Upload-only rules remain non-destructive unless they later gain an explicit managed-root cleanup model.

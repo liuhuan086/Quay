@@ -25,7 +25,7 @@ Most of this document is the **target** model. Track what is actually shipped he
 
 **Stale mirror trash cleanup shipped through Step 12:** after a mirror delete has successfully passed marker/canary validation and moved a target into `.swiftftp-trash`, SwiftFTP may clean old trash timestamp folders for the same rule. Cleanup is throttled, retention-based, capped per run, and recursively validates every deleted path against both the managed mirror root and the selected trash timestamp folder.
 
-**Additional shipped guardrail:** upload tasks now write to `<filename>.__swiftftp_tmp__` and rename into place on success. SwiftFTP temp files are ignored by watchers, local/remote snapshots, and default excludes. Stale-temp cleanup is intentionally not enabled until managed-root scoping exists.
+**Additional shipped guardrail:** upload tasks now write to `<filename>.__swiftftp_tmp__` and rename into place on success. SwiftFTP temp files are ignored by watchers, local/remote snapshots, and default excludes. Stale temp cleanup shipped through Step 13: managed mirror rules may delete old SwiftFTP temp files only inside the verified mirror root, with retention, cadence, scan, and per-run caps.
 
 **Managed-root and quarantine guardrails shipped:** SwiftFTP can create/read `.swiftftp-mirror.json`, validate rule ID, canonical remote root, schema version, and mode, reject destructive targets outside the managed root, run a SwiftFTP-owned canary create/rename/delete check, and quarantine mirror deletes under `.swiftftp-trash`.
 
@@ -44,7 +44,7 @@ The `ac8e0a6` guardrail pass is directionally good, but it is not the final sync
 - **Remote mtime trust — Open (design-level).** `SyncConflictDecision.shouldSkipUpload` already fails open on unknown timestamps, but the *quality* of `RemoteFileItem.modifiedDate` is not graded by protocol. SFTP attrs are usually reliable; FTP `MLSD modify` should be parsed as UTC; FTP `LIST` time is not reliable enough to drive a skip. When timestamp quality is unknown, mark the comparison uncertain rather than silently skipping an upload.
 - **Burst-cap visibility — Confirmed gap.** `recentlyChangedFiles` breaks silently at 500 files with no rule state or UI signal. A truncated scan must show "scan truncated" and offer a rescan / manual initial sync instead of dropping the remaining files.
 - **Collision depth — Accurate; future requirement.** `validateAndAddWatcher` does a top-level, name-only, non-recursive check. That is acceptable as a conservative first pass, but the initial-sync / mirror planner must report exact relative-path collisions and type conflicts (file-vs-directory) recursively.
-- **App temp matching — Confirmed gap.** Only `hasPrefix(".__swiftftp_tmp__")` is checked (in `shouldSyncFile` and `recentlyChangedFiles`); the default-exclude literal `.__swiftftp_tmp__` is an exact-component match. The suffix form (e.g. `report.txt.__swiftftp_tmp__`) is not skipped. Cover both `.__swiftftp_tmp__*` and `*.__swiftftp_tmp__`, consistent with the Atomic Uploads plan below.
+- **App temp matching — Resolved.** SwiftFTP temp names are detected with both prefix and suffix forms, case-folded, and covered by default excludes, local scans, watcher filters, remote snapshots, and stale temp cleanup.
 - **Mandatory secret excludes are case-sensitive — Confirmed gap.** `ExclusionMatcher` currently compares patterns and components case-sensitively. On case-insensitive macOS volumes or mixed-platform syncs, `.SSH`, `.Env`, `ID_RSA`, or `.AWS` can bypass the mandatory layer. Secret excludes should compare using case-folded and Unicode-normalized names.
 
 ## Product Goal
@@ -231,7 +231,7 @@ Upload files using a temporary remote name and then rename into place:
 1. Upload to `<filename>.__swiftftp_tmp__`.
 2. Verify upload completion.
 3. Rename temp file to the final remote path.
-4. Clean stale SwiftFTP temp files only inside the rule root.
+4. Clean stale SwiftFTP temp files only inside the verified managed mirror root, with retention and per-run limits.
 
 FTP and SFTP implementations may need protocol-specific handling, but the sync layer should treat atomic upload as the target behavior.
 
@@ -241,6 +241,13 @@ Before upload, wait until a changed file is stable:
 - Do not upload sockets, devices, FIFOs, or other non-regular files.
 - Skip files currently matching app temp patterns.
 - If a file disappears during upload planning, treat it as a delete or ignore based on the selected mode.
+
+Stale temp cleanup:
+
+- Only managed mirror rules with a matching marker may clean remote temp files automatically.
+- Cleanup ignores folders, recent temp files, temp files without a remote modification time, and anything outside the managed root.
+- Before deleting a temp path, validate both the temp path and the restored final path are inside the marker root.
+- Use a retention window, scan cap, run cadence, and per-run deletion cap so cleanup cannot turn into a broad remote delete.
 
 ## Forbidden Sync Roots
 

@@ -901,6 +901,51 @@ public enum SwiftFTPTempFile {
     }
 }
 
+public struct SwiftFTPTempCleanupCandidate: Equatable, Sendable {
+    public var path: String
+    public var modifiedDate: Date
+
+    public init(path: String, modifiedDate: Date) {
+        self.path = path
+        self.modifiedDate = modifiedDate
+    }
+}
+
+public enum SwiftFTPTempCleanupPolicy {
+    public static let retention: TimeInterval = 7 * 24 * 60 * 60
+    public static let minimumRunInterval: TimeInterval = 6 * 60 * 60
+    public static let maxFilesPerRun = 50
+    public static let maxScannedItems = 10_000
+
+    public static func isDue(lastRun: Date?, now: Date = Date()) -> Bool {
+        guard let lastRun else { return true }
+        return now.timeIntervalSince(lastRun) >= minimumRunInterval
+    }
+
+    public static func cleanupCandidates(
+        from items: [RemoteFileItem],
+        now: Date = Date(),
+        retention: TimeInterval = retention,
+        maxCount: Int = maxFilesPerRun
+    ) -> [SwiftFTPTempCleanupCandidate] {
+        let cutoff = now.addingTimeInterval(-retention)
+        return items.compactMap { item -> SwiftFTPTempCleanupCandidate? in
+            guard !item.isDirectory,
+                  SwiftFTPTempFile.isTemporaryFileName(item.name),
+                  let modifiedDate = item.modifiedDate,
+                  modifiedDate < cutoff else {
+                return nil
+            }
+            return SwiftFTPTempCleanupCandidate(path: item.path, modifiedDate: modifiedDate)
+        }
+        .sorted { lhs, rhs in
+            lhs.modifiedDate == rhs.modifiedDate ? lhs.path < rhs.path : lhs.modifiedDate < rhs.modifiedDate
+        }
+        .prefix(max(0, maxCount))
+        .map { $0 }
+    }
+}
+
 public enum RemoteDriftIssueKind: Sendable, Equatable {
     case remoteMissingFile
     case remoteMissingDirectory
@@ -1146,6 +1191,7 @@ public enum ManagedMirrorRootError: LocalizedError, Equatable, Sendable {
     case mirrorDeletionNotEnabled
     case markerSchemaUnsupported(Int)
     case destructivePathOutsideManagedRoot(path: String, root: String)
+    case destructivePathNotSwiftFTPTempFile(path: String)
     case markerDecodeFailed(String)
     case markerIOFailed(String)
     case canaryFailed(String)
@@ -1164,6 +1210,8 @@ public enum ManagedMirrorRootError: LocalizedError, Equatable, Sendable {
             return "远程镜像 marker 版本 \(version) 不受支持，已停止执行删除操作。"
         case .destructivePathOutsideManagedRoot(let path, let root):
             return "拒绝删除「\(path)」，它不在受管理的镜像根目录「\(root)」内。"
+        case .destructivePathNotSwiftFTPTempFile(let path):
+            return "拒绝删除「\(path)」，它不是 SwiftFTP 临时文件。"
         case .markerDecodeFailed(let message):
             return "无法读取远程镜像 marker：\(message)"
         case .markerIOFailed(let message):
@@ -1292,6 +1340,21 @@ public enum ManagedMirrorRoot {
                 path: SyncPathValidator.canonicalRemotePath(remotePath),
                 root: SyncPathValidator.canonicalRemotePath(timestampRoot)
             )
+        }
+    }
+
+    public static func validateTempCleanupTarget(
+        _ remotePath: String,
+        for marker: ManagedMirrorRootMarker
+    ) throws {
+        try validateDestructiveTarget(remotePath, for: marker)
+        guard SwiftFTPTempFile.isTemporaryPath(remotePath) else {
+            throw ManagedMirrorRootError.destructivePathNotSwiftFTPTempFile(
+                path: SyncPathValidator.canonicalRemotePath(remotePath)
+            )
+        }
+        if let finalPath = SwiftFTPTempFile.finalRemotePath(forTemporaryPath: remotePath) {
+            try validateDestructiveTarget(finalPath, for: marker)
         }
     }
 

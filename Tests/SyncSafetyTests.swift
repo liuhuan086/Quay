@@ -639,6 +639,113 @@ final class SwiftFTPTempFileTests: XCTestCase {
     }
 }
 
+final class SwiftFTPTempCleanupPolicyTests: XCTestCase {
+
+    func test_cleanupCandidatesOnlyIncludeExpiredTempFilesWithKnownModificationDates() {
+        let now = Date(timeIntervalSince1970: 20 * 24 * 60 * 60)
+        let expired = now.addingTimeInterval(-SwiftFTPTempCleanupPolicy.retention - 1)
+        let boundary = now.addingTimeInterval(-SwiftFTPTempCleanupPolicy.retention)
+        let recent = now.addingTimeInterval(-SwiftFTPTempCleanupPolicy.retention + 1)
+        let root = "/Users/liuhuan/Downloads/docs"
+
+        let candidates = SwiftFTPTempCleanupPolicy.cleanupCandidates(
+            from: [
+                RemoteFileItem(
+                    name: "main.swift.__swiftftp_tmp__",
+                    path: "\(root)/main.swift.__swiftftp_tmp__",
+                    isDirectory: false,
+                    modifiedDate: expired
+                ),
+                RemoteFileItem(
+                    name: "boundary.swift.__swiftftp_tmp__",
+                    path: "\(root)/boundary.swift.__swiftftp_tmp__",
+                    isDirectory: false,
+                    modifiedDate: boundary
+                ),
+                RemoteFileItem(
+                    name: "recent.swift.__swiftftp_tmp__",
+                    path: "\(root)/recent.swift.__swiftftp_tmp__",
+                    isDirectory: false,
+                    modifiedDate: recent
+                ),
+                RemoteFileItem(
+                    name: "unknown.swift.__swiftftp_tmp__",
+                    path: "\(root)/unknown.swift.__swiftftp_tmp__",
+                    isDirectory: false
+                ),
+                RemoteFileItem(
+                    name: "temp-dir.__swiftftp_tmp__",
+                    path: "\(root)/temp-dir.__swiftftp_tmp__",
+                    isDirectory: true,
+                    modifiedDate: expired
+                ),
+                RemoteFileItem(
+                    name: "main.swift",
+                    path: "\(root)/main.swift",
+                    isDirectory: false,
+                    modifiedDate: expired
+                )
+            ],
+            now: now
+        )
+
+        XCTAssertEqual(candidates, [
+            SwiftFTPTempCleanupCandidate(
+                path: "\(root)/main.swift.__swiftftp_tmp__",
+                modifiedDate: expired
+            )
+        ])
+    }
+
+    func test_cleanupCandidatesAreOldestFirstAndCapped() {
+        let now = Date(timeIntervalSince1970: 20 * 24 * 60 * 60)
+        let root = "/Users/liuhuan/Downloads/docs"
+        let oldest = now.addingTimeInterval(-SwiftFTPTempCleanupPolicy.retention - 30)
+        let middle = now.addingTimeInterval(-SwiftFTPTempCleanupPolicy.retention - 20)
+        let newest = now.addingTimeInterval(-SwiftFTPTempCleanupPolicy.retention - 10)
+        let items = [
+            ("newest.swift.__swiftftp_tmp__", newest),
+            ("oldest.swift.__swiftftp_tmp__", oldest),
+            ("middle.swift.__swiftftp_tmp__", middle)
+        ].map { name, modifiedDate in
+            RemoteFileItem(
+                name: name,
+                path: "\(root)/\(name)",
+                isDirectory: false,
+                modifiedDate: modifiedDate
+            )
+        }
+
+        XCTAssertEqual(
+            SwiftFTPTempCleanupPolicy.cleanupCandidates(from: items, now: now, maxCount: 2),
+            [
+                SwiftFTPTempCleanupCandidate(
+                    path: "\(root)/oldest.swift.__swiftftp_tmp__",
+                    modifiedDate: oldest
+                ),
+                SwiftFTPTempCleanupCandidate(
+                    path: "\(root)/middle.swift.__swiftftp_tmp__",
+                    modifiedDate: middle
+                )
+            ]
+        )
+    }
+
+    func test_cleanupRunCadence() {
+        let now = Date(timeIntervalSince1970: 10_000)
+
+        XCTAssertTrue(SwiftFTPTempCleanupPolicy.isDue(lastRun: nil, now: now))
+        XCTAssertFalse(SwiftFTPTempCleanupPolicy.isDue(
+            lastRun: now.addingTimeInterval(-SwiftFTPTempCleanupPolicy.minimumRunInterval + 1),
+            now: now
+        ))
+        XCTAssertTrue(SwiftFTPTempCleanupPolicy.isDue(
+            lastRun: now.addingTimeInterval(-SwiftFTPTempCleanupPolicy.minimumRunInterval),
+            now: now
+        ))
+    }
+}
+
 final class ManagedMirrorRootTests: XCTestCase {
 
     func test_markerUsesCanonicalRemoteRootAndWatcherIdentity() {
@@ -805,6 +912,24 @@ final class ManagedMirrorRootTests: XCTestCase {
         XCTAssertThrowsError(try ManagedMirrorRoot.validateTrashCleanupTarget(
             "/Users/liuhuan/Downloads/docs/Sources/Main.swift",
             timestampRoot: timestampRoot,
+            for: marker
+        ))
+    }
+
+    func test_tempCleanupTargetMustStayInsideManagedRootAndUseSwiftFTPTempName() throws {
+        let watcher = mirrorWatcher(remotePath: "/Users/liuhuan/Downloads/docs")
+        let marker = ManagedMirrorRoot.marker(for: watcher, appVersion: "2.0.0")
+
+        XCTAssertNoThrow(try ManagedMirrorRoot.validateTempCleanupTarget(
+            "/Users/liuhuan/Downloads/docs/Sources/Main.swift.__swiftftp_tmp__",
+            for: marker
+        ))
+        XCTAssertThrowsError(try ManagedMirrorRoot.validateTempCleanupTarget(
+            "/Users/liuhuan/Downloads/docs/Sources/Main.swift",
+            for: marker
+        ))
+        XCTAssertThrowsError(try ManagedMirrorRoot.validateTempCleanupTarget(
+            "/Users/liuhuan/Downloads/docs-backup/Main.swift.__swiftftp_tmp__",
             for: marker
         ))
     }
