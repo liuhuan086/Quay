@@ -210,6 +210,7 @@ final class ServerRepositoryTests: XCTestCase {
             await repo.delete(server.id)
         }
         UserDefaults.standard.removeObject(forKey: repoKey)
+        UserDefaults.standard.removeObject(forKey: "\(repoKey!).blockedCredentialIDs")
         repo = nil
         repoKey = nil
         try await super.tearDown()
@@ -479,7 +480,10 @@ final class ServerRepositoryTests: XCTestCase {
     func test_deleteRemovesServerEvenWhenKeychainScrubFails() async {
         let failKey = "swiftftp.tests.faildel.\(UUID().uuidString)"
         let repo = ServerRepository(key: failKey, keychain: DeleteFailingKeychain())
-        defer { UserDefaults.standard.removeObject(forKey: failKey) }
+        defer {
+            UserDefaults.standard.removeObject(forKey: failKey)
+            UserDefaults.standard.removeObject(forKey: "\(failKey).blockedCredentialIDs")
+        }
 
         let id = UUID()
         let json = """
@@ -498,7 +502,10 @@ final class ServerRepositoryTests: XCTestCase {
         let failKey = "swiftftp.tests.stale.\(UUID().uuidString)"
         let keychain = DeleteFailingMemoryKeychain()
         let repo = ServerRepository(key: failKey, keychain: keychain)
-        defer { UserDefaults.standard.removeObject(forKey: failKey) }
+        defer {
+            UserDefaults.standard.removeObject(forKey: failKey)
+            UserDefaults.standard.removeObject(forKey: "\(failKey).blockedCredentialIDs")
+        }
 
         let id = UUID()
         let original = ServerConfig(
