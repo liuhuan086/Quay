@@ -2,6 +2,12 @@
 import Foundation
 
 final class ServerRepository: @unchecked Sendable {
+    enum CredentialPolicy {
+        case replace
+        case replaceIfNonEmpty
+        case preserve
+    }
+
     private let key: String
     private let enc = JSONEncoder()
     private let dec = JSONDecoder()
@@ -21,11 +27,10 @@ final class ServerRepository: @unchecked Sendable {
         for i in list.indices {
             let account = credentialAccount(for: list[i].id)
             if !list[i].password.isEmpty {
-                _ = try? keychain.savePassword(list[i].password, for: account)
+                try? keychain.savePassword(list[i].password, for: account, label: list[i].displayName)
                 list[i].password = ""
                 migratedLegacyPassword = true
             }
-            list[i].password = (try? keychain.getPassword(for: account)) ?? ""
         }
         if migratedLegacyPassword {
             persist(list)
@@ -33,8 +38,16 @@ final class ServerRepository: @unchecked Sendable {
         return list.sorted { $0.displayName < $1.displayName }
     }
 
-    func save(_ c: ServerConfig) {
-        persistCredential(for: c)
+    func password(for id: UUID) -> String {
+        (try? keychain.getPassword(for: credentialAccount(for: id))) ?? ""
+    }
+
+    func deletePassword(for id: UUID) {
+        keychain.deletePassword(for: credentialAccount(for: id))
+    }
+
+    func save(_ c: ServerConfig, credentialPolicy: CredentialPolicy = .replace) {
+        persistCredential(for: c, policy: credentialPolicy)
         var all = fetchAll()
         var stored = c
         stored.password = ""
@@ -42,7 +55,9 @@ final class ServerRepository: @unchecked Sendable {
         persist(all)
     }
 
-    func update(_ c: ServerConfig) { save(c) }
+    func update(_ c: ServerConfig, credentialPolicy: CredentialPolicy = .replaceIfNonEmpty) {
+        save(c, credentialPolicy: credentialPolicy)
+    }
 
     @discardableResult
     func updateLastConnected(for id: UUID, at date: Date) -> ServerConfig? {
@@ -65,7 +80,7 @@ final class ServerRepository: @unchecked Sendable {
         let incoming = try dec.decode([ServerConfig].self, from: data)
         var all = fetchAll()
         for c in incoming where !all.contains(where: { $0.id == c.id }) {
-            persistCredential(for: c)
+            persistCredential(for: c, policy: .replace)
             var stored = c
             stored.password = ""
             all.append(stored)
@@ -81,12 +96,21 @@ final class ServerRepository: @unchecked Sendable {
         if let d = try? enc.encode(sanitized) { UserDefaults.standard.set(d, forKey: key) }
     }
 
-    private func persistCredential(for config: ServerConfig) {
+    private func persistCredential(for config: ServerConfig, policy: CredentialPolicy) {
         let account = credentialAccount(for: config.id)
+        switch policy {
+        case .preserve:
+            return
+        case .replaceIfNonEmpty where config.password.isEmpty:
+            return
+        case .replace, .replaceIfNonEmpty:
+            break
+        }
+
         if config.password.isEmpty {
             keychain.deletePassword(for: account)
         } else {
-            _ = try? keychain.savePassword(config.password, for: account)
+            try? keychain.savePassword(config.password, for: account, label: config.displayName)
         }
     }
 
