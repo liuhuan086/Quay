@@ -45,8 +45,12 @@ final class ServerRepository: @unchecked Sendable {
         await store.updateLastConnected(for: id, at: date)
     }
 
-    func delete(_ id: UUID) async throws {
-        try await store.delete(id)
+    // Deleting a server always succeeds; the Keychain scrub is best-effort.
+    // Returns false if the stored credential could not be removed (the server
+    // is still deleted) so the caller can surface a non-blocking notice.
+    @discardableResult
+    func delete(_ id: UUID) async -> Bool {
+        await store.delete(id)
     }
 
     func exportJSON() throws -> Data {
@@ -248,14 +252,16 @@ final class ServerRepository: @unchecked Sendable {
             return updated
         }
 
-        func delete(_ id: UUID) throws {
+        @discardableResult
+        func delete(_ id: UUID) -> Bool {
             let existing = loadList()
-            guard keychain.deletePassword(for: credentialAccount(for: id)) else {
-                throw ServerRepositoryError.keychainDeleteFailed
-            }
+            // Best-effort credential scrub. A failure leaves an inert item
+            // keyed by a never-reused UUID; never block removing the server.
+            let credentialCleared = keychain.deletePassword(for: credentialAccount(for: id))
             var all = existing
             all.removeAll { $0.id == id }
             persist(all, preservingLegacyPasswordsFrom: existing, strippingLegacyPasswordFor: [id])
+            return credentialCleared
         }
 
         func importJSON(_ data: Data) throws {
