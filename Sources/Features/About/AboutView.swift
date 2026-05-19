@@ -7,7 +7,7 @@ struct AboutView: View {
 
     private var appVersion: String {
         let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "2.0.0"
+        let version = info?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = info?["CFBundleVersion"] as? String ?? "1"
         return "\(version) (\(build))"
     }
