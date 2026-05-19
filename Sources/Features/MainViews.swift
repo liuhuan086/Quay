@@ -775,7 +775,8 @@ private struct TransferBadgePopoverAnchor: NSViewRepresentable {
             )
             popover.contentViewController = content
             popover.contentSize = NSSize(width: 420, height: 380)
-            popover.show(relativeTo: host.bounds, of: host, preferredEdge: .minY)
+            let bottomEdge: NSRectEdge = host.isFlipped ? .maxY : .minY
+            popover.show(relativeTo: host.bounds, of: host, preferredEdge: bottomEdge)
         }
 
         func bindPresentationRequestIfNeeded() {
