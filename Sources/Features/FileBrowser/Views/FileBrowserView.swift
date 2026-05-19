@@ -154,26 +154,26 @@ struct FileBrowserView: View {
         .alert("文件已存在", isPresented: $showOverwriteConfirm) {
             Button("全部覆盖") {
                 guard let plan = pendingTransferPlan else { return }
+                pendingTransferPlan = nil
                 Task { @MainActor in
                     await commitTransferPlan(plan, includingConflicts: true)
-                    pendingTransferPlan = nil
                 }
             }
             Button("跳过同名") {
                 guard let plan = pendingTransferPlan else { return }
+                pendingTransferPlan = nil
                 Task { @MainActor in
                     await commitTransferPlan(plan, includingConflicts: false)
-                    pendingTransferPlan = nil
                 }
             }
             Button("停止", role: .cancel) {
-                if let plan = pendingTransferPlan {
-                    discardPendingTransferPlan(plan)
-                }
-                pendingTransferPlan = nil
+                discardPendingTransferPlanIfNeeded()
             }
         } message: {
             Text(overwriteMessage)
+        }
+        .onDisappear {
+            discardPendingTransferPlanIfNeeded()
         }
     }
 
@@ -897,6 +897,12 @@ struct FileBrowserView: View {
 
     private func discardPendingTransferPlan(_ plan: TransferPlan) {
         appState.discardEmptyTransferBatches(ids: plan.allBatchIDs)
+    }
+
+    private func discardPendingTransferPlanIfNeeded() {
+        guard let plan = pendingTransferPlan else { return }
+        discardPendingTransferPlan(plan)
+        pendingTransferPlan = nil
     }
 
     private func showTransferPlanWarnings(_ messages: [String]) {
