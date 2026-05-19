@@ -56,7 +56,7 @@
 
 ## 3. 权益模型规范（代码架构）
 
-### 3.1 状态机（五态，含 AI 漏掉的离线态）
+### 3.1 状态机（权益五态 + 购买待批准态）
 
 | 状态 | 触发条件 | App 行为 |
 |------|----------|----------|
@@ -65,13 +65,14 @@
 | `trialExpired` | trial 交易存在 但 `purchaseDate + 7d <= now` | **非变砖锁定态**（见 §4） |
 | `pro` | pro 交易存在 且 `revocationDate == nil` | 完整功能（永久） |
 | `entitlementUnknown` | 权益解析无法得到 verified StoreKit 结果（例如 StoreKit/验证异常、超时、只有 unverified transaction），且无法判断用户是否有权 | 不得变砖：允许进入、显示「无法校验购买」提示、提供「重试 / 恢复购买」。若本会话已有 verified 解析结果，沿用该内存结果；冷启动无结果时进入锁定壳但不得空白付费墙 |
+| `purchasePending` | trial 或 pro 购买返回 `.pending`，尚无 verified transaction | **购买流程 UI 状态，不是权益**。不得解锁新能力；显示「等待批准」。若用户已有 trial/pro 权益，原权益继续生效；若无权益，落 §4 非变砖锁定壳并等待 `Transaction.updates` / 下次 `currentEntitlements` |
 
 **状态解析必须分两层（防分叉 bug）**：
 
 1. 先判断是否拿到了一个可信的 verified entitlement snapshot。成功拿到（哪怕结果为空）才进入业务状态解析；拿不到则是 `entitlementUnknown`，不得伪装成 `neverStarted`。
 2. 在 verified snapshot 内部按确定优先级解析：`pro` ＞ `trialActive` ＞ `trialExpired` ＞ `neverStarted`。即「持有 pro 且同时有已过期 trial 交易」必须解析为 `pro`；「有 trial 交易但已过期且无 pro」才是 `trialExpired`；「verified snapshot 为空」才是 `neverStarted`。
 
-能力门控只看 `canUseCoreFTP`；状态枚举仅用于 UI/Onboarding 路由，二者不得各自判断。
+能力门控只看 `canUseCoreFTP`；状态枚举仅用于 UI/Onboarding 路由，二者不得各自判断。`purchasePending` 应作为 UI overlay / pending flag 叠在权益状态上，不得覆盖已有有效权益。
 
 ### 3.2 能力解析（统一出口，预留二档）
 
@@ -120,8 +121,8 @@ struct Entitlements: Sendable {
 - 必须区分「verified entitlement snapshot 为空」与「无法获得 verified snapshot」：前者是 `neverStarted`，后者才是 `entitlementUnknown`。
 - StoreKit/验证异常导致无法解析 verified entitlement 时，进入 `entitlementUnknown`，**不得锁死**。沿用本会话已解析结果；冷启动且无任何结果时默认锁定但**必须**给「重试 / 恢复购买」动线，不得让可能已付费用户无出路。
 - 如果 StoreKit 返回本机缓存的 verified non-consumable transaction，即使网络不可达，也按官方交易结果授权；不要额外要求联网。
-- **未完成交易必须在启动时兜住**：除 `currentEntitlements` 外，启动时还要遍历 `Transaction.unfinished`（上次会话中断的 trial/pro 购买）并在解析后 `finish()`；交易监听器要在尽早时机（`StoreManager.init`）挂上，避免错过启动瞬间到达的交易。
-- **pending（Ask to Buy / 家长批准）不得当作拒绝**：trial 购买返回 `.pending` 时，既非 `neverStarted` 也非 `trialActive`，按 §4 非变砖锁定壳处理并显示「等待批准」文案，由 `Transaction.updates` 到达后自动转 `trialActive`，期间不得反复弹窗。
+- **未完成交易必须在启动时兜住**：除 `currentEntitlements` 外，启动时还要遍历 `Transaction.unfinished`（上次会话中断的 trial/pro 购买）；只对 verified 且 productID 已知的 transaction 交付权益、刷新 UI 后 `finish()`。unverified transaction 不得授权；未知 productID 不得静默授权或静默 finish，必须显式记录并按迁移策略处理。交易监听器要在尽早时机（`StoreManager.init`）挂上，避免错过启动瞬间到达的交易。
+- **pending（Ask to Buy / 家长批准）不得当作拒绝**：trial 或 pro 购买返回 `.pending` 时，没有 transaction、没有 `purchaseDate`、没有新权益；可记录非授权 `pendingPurchaseKind` UI flag（可持久化，但只影响文案），按 `purchasePending` 显示「等待批准」文案。若用户已有有效 trial/pro，继续按既有权益使用；若无权益，按 §4 非变砖锁定壳处理。由 `Transaction.updates` 或下次 `currentEntitlements` 出现 verified transaction 后自动转 `trialActive` / `pro`，并清除 pending flag；期间不得反复弹窗。若用户稍后重试购买，必须允许手动重试/恢复，不能把 pending flag 当作永久阻断。
 
 ---
 
@@ -196,7 +197,7 @@ struct Entitlements: Sendable {
 
 ### Step 4 — 重写 StoreManager（双商品 + 日期判定 + 删除 UserDefaults）
 - **目标**：授权来源切到 StoreKit 交易，删除自制计时。
-- **改动**：`Sources/Core/Billing/StoreManager.swift`（新增 `trialProductID`；`refreshEntitlements()` 同时识别 trial/pro，trial 用 `purchaseDate + 7d` 算 `trialExpiresAt`，pro 看 `revocationDate`；产出 §3.2 `Entitlements`；`Transaction.updates` 同时处理 trial/pro/未来 cloud；启动遍历 `Transaction.unfinished` 兜住中断购买；处理 `.pending`；购买成功后 `finish()`）；`Sources/App/AppState.swift`（删除 `trialStartedAt` 及其 `didSet`/`trialStartedAtKey`/`wireTrialTimer` 中对持久化的依赖；`hasFullAccess` 改为读统一 capability；实现 §3.3 离线策略——内存缓存、不落盘自制日期、`entitlementUnknown` 不变砖）。
+- **改动**：`Sources/Core/Billing/StoreManager.swift`（新增 `trialProductID`；`refreshEntitlements()` 同时识别 trial/pro，trial 用 `purchaseDate + 7d` 算 `trialExpiresAt`，pro 看 `revocationDate`；产出 §3.2 `Entitlements`；`Transaction.updates` 同时处理 trial/pro/未来 cloud；启动遍历 `Transaction.unfinished` 兜住中断购买；处理 `.pending` 为非授权 `purchasePending` UI 状态；购买成功交付权益后 `finish()`）；`Sources/App/AppState.swift`（删除 `trialStartedAt` 及其 `didSet`/`trialStartedAtKey`/`wireTrialTimer` 中对持久化的依赖；`hasFullAccess` 改为读统一 capability；实现 §3.3 离线策略——内存缓存、不落盘自制日期、`entitlementUnknown` 不变砖）。
 - **交付物**：双商品 StoreManager；统一 capability 出口；离线/失败兜底逻辑；可测试 clock。
 - **测试**（含 §8 矩阵）：单测覆盖能力解析（trial 未过期/已过期/已撤销/pro/二者皆无/StoreKit 失败兜底）；**状态优先级**（pro+已过期 trial 必解析为 pro，矩阵 #19）；verified 空 snapshot 与解析失败的分流（#21）；覆盖 `Transaction.updates` 后状态刷新；确认全仓无 `trialStartedAt` 持久读写。
 - **下一步**：Step 5。
@@ -245,7 +246,9 @@ struct Entitlements: Sendable {
 | 22 | Pro 价格未加载时尝试开始试用 | 开始试用按钮禁用，提示加载/重试；不得在价格未知时发起 trial 购买 |
 | 23 | 到期前提醒已展示 flag | 可持久化 UI flag；删除/篡改 flag 不影响 `canUseCoreFTP` |
 | 24 | 上次会话中断的 trial/pro 购买 | 启动时经 `Transaction.unfinished` 兜住并 `finish()`，状态正确 |
-| 25 | trial 购买返回 `.pending`（Ask to Buy） | 非变砖锁定壳 +「等待批准」；批准后经 `Transaction.updates` 自动转 `trialActive` |
+| 25 | trial 购买返回 `.pending`（Ask to Buy） | 无新权益；非变砖锁定壳 +「等待批准」；批准后经 `Transaction.updates` / `currentEntitlements` 自动转 `trialActive` 并清除 pending flag |
+| 26 | Pro 购买返回 `.pending`（试用中或过期态） | 试用中继续使用 trial 权益；过期/无权益则锁定壳 +「等待批准」；批准后自动转 `pro` |
+| 27 | `Transaction.unfinished` 含 unverified 或未知 productID | 不授权；不静默 finish；记录并走显式迁移/错误处理 |
 
 ---
 
