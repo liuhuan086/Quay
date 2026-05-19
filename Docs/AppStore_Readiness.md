@@ -1,7 +1,7 @@
 # Quay — 上架 App Store 可行性 / 定价 / 整改清单
 
 **审阅人视角**：iOS/macOS 应用架构师 + App Review 经验 + 独立开发者商业化角度
-**版本**：v2.0.0（构建产物：`build/SwiftFTP_v2.0.0.dmg`）
+**版本**：v1.0（MAS 首发构建建议：`1.0 (2)`）
 **评估日期**：2026-05-19（已同步当前代码状态）
 **仓库规模**：约 5k 行 Swift（含 66 个单测） / 单人开发
 
@@ -162,7 +162,7 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 | A6 | 没有 App Store Connect 物料：截图、副标题、关键字、宣传文本、隐私问卷 | 🔴 |
 | A7 | StoreKit 2 / 试用 | 🟡 基础 IAP/试用 UI 已有；必须在 StoreKit config 或 Sandbox 账号里跑通购买/恢复 |
 | A8 | `LSApplicationCategoryType` 已设为 `utilities`（OK） | ✅ |
-| A9 | `CFBundleShortVersionString = 2.0.0`，但 `CFBundleVersion = 1`——MAS 每次提交需要单调递增 build | 🟡 |
+| A9 | `CFBundleShortVersionString = 1.0`，`CFBundleVersion = 2`——与 ASC 首发版本 `1.0` 对齐，且 build 高于已上传的 `2.0.0 (1)` | ✅ |
 | A10 | 首次启动引导 | ✅ 已有 Onboarding；仍需截图和文案复核 |
 
 ### 4.2 隐私问卷 (Privacy Nutrition Label) 预填
