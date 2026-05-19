@@ -11,8 +11,8 @@ struct OnboardingView: View {
         [
             OnboardingStep(
                 symbol: "arrow.up.arrow.down.circle.fill",
-                title: "欢迎使用 SwiftFTP",
-                subtitle: "极简、安全、Swift 原生的 FTP/FTPS/SFTP 客户端。",
+                title: "欢迎使用 Quay",
+                subtitle: "极简、安全、Swift 原生的 FTP/FTPS/SFTP 文件传输客户端。",
                 accent: .blue
             ),
             OnboardingStep(

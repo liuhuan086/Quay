@@ -1,4 +1,4 @@
-# SwiftFTP — 上架 App Store 可行性 / 定价 / 整改清单
+# Quay — 上架 App Store 可行性 / 定价 / 整改清单
 
 **审阅人视角**：iOS/macOS 应用架构师 + App Review 经验 + 独立开发者商业化角度
 **版本**：v2.0.0（构建产物：`build/SwiftFTP_v2.0.0.dmg`）
@@ -44,7 +44,7 @@
 | Yummy FTP Pro      | $9.99（精简版）/ $59.99 | 价格分层 |
 | FileZilla          | 免费                | 老牌但 UI 极差 |
 
-**SwiftFTP 的定位空档**：现代 SwiftUI / 中文优化 / 价格亲民的 SFTP 工具——介于免费但难用的 FileZilla 与重量级的 Transmit 之间，对**国内独立开发者、运维、Web 开发者**有吸引力。
+**Quay 的定位空档**：现代 SwiftUI / 中文优化 / 价格亲民的 SFTP 工具——介于免费但难用的 FileZilla 与重量级的 Transmit 之间，对**国内独立开发者、运维、Web 开发者**有吸引力。
 
 ### 1.3 定价建议
 
@@ -221,7 +221,7 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 
 ---
 
-## 6. 上架 SwiftFTP 的整改路线图
+## 6. 上架 Quay 的整改路线图
 
 ### Phase 1 — 必做才能进 App Review（约 2–3 周）
 

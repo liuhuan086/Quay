@@ -52,7 +52,7 @@ enum PurchaseKind: Equatable, Sendable {
     var displayName: String {
         switch self {
         case .trial: return "7 天试用"
-        case .pro: return "SwiftFTP Pro"
+        case .pro: return "Quay Pro"
         }
     }
 }
@@ -151,7 +151,7 @@ final class StoreManager: ObservableObject {
             await loadProducts()
         }
         guard let product = proProduct else {
-            statusMessage = "SwiftFTP Pro 暂不可用。"
+            statusMessage = "Quay Pro 暂不可用。"
             return false
         }
         return await purchase(product, kind: .pro)
@@ -221,7 +221,7 @@ final class StoreManager: ObservableObject {
                 }
                 applyVerifiedTransaction(transaction)
                 pendingPurchaseKind = nil
-                statusMessage = kind == .trial ? "7 天试用已开始。" : "已解锁 SwiftFTP Pro。"
+                statusMessage = kind == .trial ? "7 天试用已开始。" : "已解锁 Quay Pro。"
                 await transaction.finish()
                 return true
             case .userCancelled:

@@ -6,12 +6,12 @@
       "internalID" : "B5B0F2D7",
       "localizations" : [
         {
-          "description" : "7-day complete trial for SwiftFTP local FTP, FTPS, and SFTP features.",
+          "description" : "7-day complete trial for Quay local FTP, FTPS, and SFTP features.",
           "displayName" : "7-Day Trial",
           "locale" : "en_US"
         },
         {
-          "description" : "SwiftFTP 本地 FTP、FTPS、SFTP 功能的 7 天完整试用。",
+          "description" : "Quay 本地 FTP、FTPS、SFTP 功能的 7 天完整试用。",
           "displayName" : "7-Day Trial（7 天试用）",
           "locale" : "zh_Hans"
         }
@@ -26,18 +26,18 @@
       "internalID" : "C276D7C2",
       "localizations" : [
         {
-          "description" : "Unlocks SwiftFTP local FTP, FTPS, and SFTP client features.",
-          "displayName" : "SwiftFTP Pro",
+          "description" : "Unlocks Quay local FTP, FTPS, and SFTP client features.",
+          "displayName" : "Quay Pro",
           "locale" : "en_US"
         },
         {
-          "description" : "解锁 SwiftFTP 本地 FTP、FTPS、SFTP 客户端功能。",
-          "displayName" : "SwiftFTP Pro（本地功能）",
+          "description" : "解锁 Quay 本地 FTP、FTPS、SFTP 客户端功能。",
+          "displayName" : "Quay Pro（本地功能）",
           "locale" : "zh_Hans"
         }
       ],
       "productID" : "com.swiftftp.app.pro",
-      "referenceName" : "SwiftFTP Pro",
+      "referenceName" : "Quay Pro",
       "type" : "NonConsumable"
     }
   ],

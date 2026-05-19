@@ -126,7 +126,7 @@ private struct EntitlementCheckingView: View {
                     .controlSize(.large)
                 Text("正在校验购买状态")
                     .font(.headline)
-                Text("SwiftFTP 会先检查已有试用或 Pro 购买，再决定是否显示首次引导。")
+                Text("Quay 会先检查已有试用或 Pro 购买，再决定是否显示首次引导。")
                     .font(.callout)
                     .foregroundColor(.secondary)
             }
@@ -228,7 +228,7 @@ private struct LockedAccessView: View {
         case .entitlementUnknown:
             return "无法校验购买状态"
         case .trialActive, .pro:
-            return "SwiftFTP Pro"
+            return "Quay Pro"
         }
     }
 
@@ -237,9 +237,9 @@ private struct LockedAccessView: View {
         case .neverStarted:
             return "开始试用前请确认：试用结束后，连接、上传、下载和实时同步会锁定；你的服务器配置与本地数据不会被删除，可继续查看与导出。"
         case .trialExpired:
-            return "你仍可查看服务器配置、导出非敏感连接元数据、打开关于与设置；核心 FTP/FTPS/SFTP 操作需要 SwiftFTP Pro。"
+            return "你仍可查看服务器配置、导出非敏感连接元数据、打开关于与设置；核心 FTP/FTPS/SFTP 操作需要 Quay Pro。"
         case .entitlementUnknown:
-            return "SwiftFTP 暂时拿不到 verified StoreKit 结果。已购买用户可以重试校验或恢复购买，服务器配置不会丢失。"
+            return "Quay 暂时拿不到 verified StoreKit 结果。已购买用户可以重试校验或恢复购买，服务器配置不会丢失。"
         case .trialActive, .pro:
             return "核心功能已可用。"
         }
@@ -344,7 +344,7 @@ private struct LockedAccessView: View {
                     .controlSize(.small)
             }
             if let pending = appState.storeManager.pendingPurchaseKind {
-                Label("\(pending.displayName) 正在等待批准。批准完成后，SwiftFTP 会自动刷新权益。", systemImage: "hourglass")
+                Label("\(pending.displayName) 正在等待批准。批准完成后，Quay 会自动刷新权益。", systemImage: "hourglass")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -367,7 +367,7 @@ private struct LockedAccessView: View {
             Label("产品信息", systemImage: "info.circle")
                 .font(.headline)
             HStack(spacing: 14) {
-                Button("关于 SwiftFTP") {
+                Button("关于 Quay") {
                     appState.presentAbout()
                 }
                 .buttonStyle(.bordered)
@@ -381,15 +381,15 @@ private struct LockedAccessView: View {
 
     private var proButtonTitle: String {
         if let price = appState.storeManager.proDisplayPrice {
-            return "购买 SwiftFTP Pro - \(price)"
+            return "购买 Quay Pro - \(price)"
         }
-        return "购买 SwiftFTP Pro"
+        return "购买 Quay Pro"
     }
 
     private func exportServers() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "SwiftFTP-Servers.json"
+        panel.nameFieldStringValue = "Quay-Servers.json"
         panel.canCreateDirectories = true
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
@@ -846,7 +846,7 @@ struct AppMenuCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
-            Button("关于 SwiftFTP", action: onShowAbout)
+            Button("关于 Quay", action: onShowAbout)
         }
         CommandGroup(after: .newItem) {
             Button("导入服务器配置…") {
@@ -878,7 +878,7 @@ struct AppMenuCommands: Commands {
     private func exportServers() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "SwiftFTP-Servers.json"
+        panel.nameFieldStringValue = "Quay-Servers.json"
         panel.canCreateDirectories = true
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }

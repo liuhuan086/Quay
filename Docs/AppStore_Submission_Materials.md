@@ -1,6 +1,6 @@
-# SwiftFTP App Store Submission Materials
+# Quay App Store Submission Materials
 
-Use this handoff when creating the first Mac App Store version that references SwiftFTP's trial and Pro in-app purchases.
+Use this handoff when creating the first Mac App Store version that references Quay's trial and Pro in-app purchases.
 
 ## Product Setup
 
@@ -12,12 +12,12 @@ Create both in-app purchases in App Store Connect and add them to the same app v
 | Trial type | Non-Consumable |
 | Trial price | Price Tier 0 |
 | Trial display name | `7-Day Trial` / `7-Day Trial（7 天试用）` |
-| Trial description | `Unlocks full SwiftFTP core FTP/FTPS/SFTP features for 7 days. After the trial ends, connections, transfers, and realtime sync require SwiftFTP Pro.` |
+| Trial description | `Unlocks full Quay core FTP/FTPS/SFTP features for 7 days. After the trial ends, connections, transfers, and realtime sync require Quay Pro.` |
 | Trial Family Sharing | Off |
 | Pro product ID | `com.swiftftp.app.pro` |
 | Pro type | Non-Consumable |
-| Pro display name | `SwiftFTP Pro` / `SwiftFTP Pro（本地功能）` |
-| Pro description | `One-time unlock for SwiftFTP's core local FTP/FTPS/SFTP client features, including connections, uploads, downloads, transfer queue controls, and realtime sync.` |
+| Pro display name | `Quay Pro` / `Quay Pro（本地功能）` |
+| Pro description | `One-time unlock for Quay's core local FTP/FTPS/SFTP client features, including connections, uploads, downloads, transfer queue controls, and realtime sync.` |
 | Pro Family Sharing | Decide before submission; once enabled for a non-consumable purchase it cannot be turned off. |
 
 Do not name Pro `Full Unlock`, because future cloud integrations may become a separate paid tier. Do not put concrete Pro prices into screenshots or static copy; the app shows the localized StoreKit `displayPrice`.
@@ -26,7 +26,7 @@ Do not name Pro `Full Unlock`, because future cloud integrations may become a se
 
 Paste and adapt this note in App Review Information:
 
-> SwiftFTP uses the App Review Guideline 3.1.1 Tier 0 Non-Consumable trial path. `com.swiftftp.app.trial7` is a Price Tier 0 free trial product for 7 days (Display Name: `7-Day Trial`). `com.swiftftp.app.pro` is a one-time `SwiftFTP Pro` unlock for the app's initial local FTP/FTPS/SFTP client features. Before the user can start the trial, SwiftFTP discloses the trial duration, the features locked after expiry, and the later one-time Pro price using StoreKit's localized price. After expiry the app is not blank or bricked: users can still view and export non-sensitive server configuration, delete local data, open About/Privacy/Terms, buy Pro, or restore purchases. If the review account has already consumed the Tier 0 trial product, the app will enter this same locked shell, which is expected for a non-consumable trial. Use a clean Sandbox tester to review the first-trial path.
+> Quay uses the App Review Guideline 3.1.1 Tier 0 Non-Consumable trial path. `com.swiftftp.app.trial7` is a Price Tier 0 free trial product for 7 days (Display Name: `7-Day Trial`). `com.swiftftp.app.pro` is a one-time `Quay Pro` unlock for the app's initial local FTP/FTPS/SFTP client features. Before the user can start the trial, Quay discloses the trial duration, the features locked after expiry, and the later one-time Pro price using StoreKit's localized price. After expiry the app is not blank or bricked: users can still view and export non-sensitive server configuration, delete local data, open About/Privacy/Terms, buy Pro, or restore purchases. If the review account has already consumed the Tier 0 trial product, the app will enter this same locked shell, which is expected for a non-consumable trial. Use a clean Sandbox tester to review the first-trial path.
 
 ## Screenshot Plan
 
@@ -55,7 +55,7 @@ Notes for the privacy policy:
 - Server credentials are stored locally in macOS Keychain.
 - Server configuration metadata is stored locally on the user's Mac.
 - FTP/FTPS/SFTP traffic goes directly between the user's Mac and their configured servers.
-- SwiftFTP does not operate a backend service for account, telemetry, analytics, or tracking data.
+- Quay does not operate a backend service for account, telemetry, analytics, or tracking data.
 
 ## Manual Validation Before Upload
 

@@ -1,4 +1,4 @@
-# SwiftFTP Release Verification
+# Quay Release Verification
 
 Run this checklist before submitting a Mac App Store build.
 
@@ -38,7 +38,7 @@ Read `Docs/Monetization_Compliance_Plan.md` before changing IAP behavior. Use `D
 Use product IDs:
 
 - `com.swiftftp.app.trial7` — Tier 0 Non-Consumable, display name `7-Day Trial`, Family Sharing off.
-- `com.swiftftp.app.pro` — paid Non-Consumable, display name `SwiftFTP Pro`.
+- `com.swiftftp.app.pro` — paid Non-Consumable, display name `Quay Pro`.
 
 1. In App Store Connect, create both IAPs and add them to the same app version submission as the first binary that references them.
 2. Add App Review screenshots and notes for both IAPs.
@@ -50,7 +50,7 @@ Use product IDs:
    - Starting the trial requires the pre-trial disclosure screen and creates the trial transaction.
    - Trial expiry uses the original StoreKit purchase date; reinstall/restore does not reset it.
    - Expired trial enters the non-bricking locked shell: configuration is viewable/exportable, but connect/upload/download/sync are locked.
-   - `SwiftFTP Pro` purchase unlocks core FTP/FTPS/SFTP features immediately.
+   - `Quay Pro` purchase unlocks core FTP/FTPS/SFTP features immediately.
    - Restore purchases unlocks Pro after deleting/reinstalling the app.
    - User-cancelled purchase returns to the app without unlocking Pro.
    - Pending Ask to Buy purchase shows a waiting state, does not unlock new capabilities, and unlocks only after `Transaction.updates` / `currentEntitlements` delivers a verified transaction.
@@ -89,7 +89,7 @@ SFTP-specific:
 1. Password auth works.
 2. SSH key auth works after selecting the key with the picker.
 3. Restart the app and reconnect with the same SSH key without reselecting it.
-4. Change the server host key and confirm SwiftFTP blocks the connection.
+4. Change the server host key and confirm Quay blocks the connection.
 
 Sandbox file access:
 

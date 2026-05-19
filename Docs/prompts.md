@@ -173,7 +173,7 @@
 
 ```
 回归任务：
-1. 运行 App，打开“关于 SwiftFTP”，确认版本/build、致谢列表和链接显示正常
+1. 运行 App，打开“关于 Quay”，确认版本/build、致谢列表和链接显示正常
 2. 把官网 / 隐私政策 / 用户协议替换成公开 HTTPS URL
 3. 对照 `Package.resolved` 复核致谢列表是否包含 Citadel、SwiftNIO、Crypto、NIOSSH 等主要依赖
 ```

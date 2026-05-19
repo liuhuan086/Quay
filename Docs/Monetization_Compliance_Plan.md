@@ -1,8 +1,8 @@
-# SwiftFTP — 变现与上架合规整改方案（最终版）
+# Quay — 变现与上架合规整改方案（最终版）
 
 **文档性质**：可执行整改方案 / AI 与人共用的工作依据
 **适用范围**：Mac App Store（MAS）首发版本的变现模型、IAP 合规、权益与门控
-**结论定调**：MAS 免费下载 + Tier 0 `7-Day Trial` Non-Consumable + 付费 `SwiftFTP Pro` Non-Consumable（解锁首发本地 FTP/FTPS/SFTP 核心功能）；过期态为「数据可访问、核心功能锁定」，**不是全屏变砖**。
+**结论定调**：MAS 免费下载 + Tier 0 `7-Day Trial` Non-Consumable + 付费 `Quay Pro` Non-Consumable（解锁首发本地 FTP/FTPS/SFTP 核心功能）；过期态为「数据可访问、核心功能锁定」，**不是全屏变砖**。
 **关联文档**：`Docs/AppStore_Readiness.md`（总体上架阻断项）、`Docs/Release_Verification.md`（提交前验证清单，本方案新增项需并入）。
 
 ---
@@ -17,7 +17,7 @@
 - **禁止**「擅自修复」已登记的既定风险（见 §6 Accepted Risks），尤其是本地时钟回拨延长试用——这是已知并接受的取舍，不要为它加服务器校验或复杂逻辑。
 - **禁止**用重复弹窗/模态骚扰催付。允许的仅限：①一个常驻、非模态的「试用剩余 X 天」可视提示；②到期前**最多一次**温和提醒；③到期锁定那一刻。除此之外不得有任何重复模态。详见 §2.1。这同时是 App Review（4.x dark pattern / 3.1.1）与评分风险。
 - 能力判断一律走**统一的权益解析出口**（见 §3），不得在各 View 里散落 `isPro` / 日期比较。
-- 不要把付费商品对外命名为笼统的 `Full Unlock`，否则未来 `cloud` 二档会被用户合理理解为「已经买过也应包含」。首发付费商品建议显示为 `SwiftFTP Pro` / `SwiftFTP Pro（本地功能）`，文案说明它解锁当前 FTP/FTPS/SFTP 本地客户端能力。
+- 不要把付费商品对外命名为笼统的 `Full Unlock`，否则未来 `cloud` 二档会被用户合理理解为「已经买过也应包含」。首发付费商品建议显示为 `Quay Pro` / `Quay Pro（本地功能）`，文案说明它解锁当前 FTP/FTPS/SFTP 本地客户端能力。
 - 改动 IAP/门控前先读本文件与 `Docs/AppStore_Readiness.md`。
 
 ---
@@ -25,7 +25,7 @@
 ## 1. 结论与边界（合规 ≠ 转化）
 
 - **Trial IAP 只解决合规**：它把 App Review 3.1.1 风险从「高」降到「低」。它**不**自动解决转化率、评分、获客、长期收入。
-- **选择方案 A 的真实理由**（精确版）：不是 freemium 商业上必劣，而是 SwiftFTP 当前阶段（单人、时间有限）若走 freemium，需要维护一条脆弱的「读免费 / 写付费」功能边界（大量边界测试、文案解释、UI 分支、用户抱怨）。Trial IAP 的优势是**少维护这条边界**，且不把核心价值免费送出。
+- **选择方案 A 的真实理由**（精确版）：不是 freemium 商业上必劣，而是 Quay 当前阶段（单人、时间有限）若走 freemium，需要维护一条脆弱的「读免费 / 写付费」功能边界（大量边界测试、文案解释、UI 分支、用户抱怨）。Trial IAP 的优势是**少维护这条边界**，且不把核心价值免费送出。
 - **必须接受方案 A 的营销代价**：第 8 天锁功能即便合规，也天然制造一批低星评价，国区尤甚。非变砖过期态只能减伤，不能消除。缓冲手段写入 §5。
 
 ---
@@ -36,11 +36,11 @@
 |----|------|
 | 分发 | MAS 免费下载 |
 | 试用 | 7 天完整试用，经 Apple Tier 0 Non-Consumable IAP 发放 |
-| 解锁 | 一次性买断 `SwiftFTP Pro`，无订阅；解锁首发本地 FTP/FTPS/SFTP 客户端核心功能 |
+| 解锁 | 一次性买断 `Quay Pro`，无订阅；解锁首发本地 FTP/FTPS/SFTP 客户端核心功能 |
 | 首发定价 | 限时低价（¥18–25 或 $2.99），3 个月后回调 $4.99 / ¥38。目标是早期评论速度与 ASC 排名飞轮，不是首月利润 |
 | 文案纪律 | 商店页与截图明确「7 天完整试用 / 一次买断 / 无订阅」；避免误导性「免费」暗示 |
 | 催付纪律 | 仅在功能撞墙处出现一次升级入口，无弹窗轰炸 |
-| 未来杠杆 | 云存储（S3/OSS/COS）、云同步、团队能力作为**第二付费档**，不并入首发 `SwiftFTP Pro`（见 §3 二档预留） |
+| 未来杠杆 | 云存储（S3/OSS/COS）、云同步、团队能力作为**第二付费档**，不并入首发 `Quay Pro`（见 §3 二档预留） |
 
 ### 2.1 试用期内转化设计（非骚扰，结构性收益点）
 
@@ -87,7 +87,7 @@ enum AppCapability: Hashable, Sendable {
 struct Entitlements: Sendable {
     var hasTrialTransaction: Bool // 区分 neverStarted 与 trialExpired
     var trialExpiresAt: Date?     // nil = 没有 trial 交易；过期 trial 仍保留过期日期
-    var hasPro: Bool              // 首发 SwiftFTP Pro
+    var hasPro: Bool              // 首发 Quay Pro
     var hasCloud: Bool            // 预留二档，首发恒 false
 
     func capabilities(now: Date) -> Set<AppCapability> {
@@ -150,7 +150,7 @@ struct Entitlements: Sendable {
 - 到期失去：「试用结束后，连接、上传、下载、实时同步将被锁定；你的服务器配置与本地数据不会被删除，可继续查看与导出」
 - 后续费用：「永久解锁需一次性购买 [价格]，无订阅」
 - 主按钮「开始 7 天试用」，次按钮「直接购买」「恢复购买」
-- IAP Display Name：trial 商品在所有本地化中必须保留 `7-Day Trial` 语义（例如 `7-Day Trial` 或 `7-Day Trial（7 天试用）`，注意 ASC display name 长度限制）；Pro 商品避免 `Full Unlock`，用 `SwiftFTP Pro` / `SwiftFTP Pro（本地功能）`。
+- IAP Display Name：trial 商品在所有本地化中必须保留 `7-Day Trial` 语义（例如 `7-Day Trial` 或 `7-Day Trial（7 天试用）`，注意 ASC display name 长度限制）；Pro 商品避免 `Full Unlock`，用 `Quay Pro` / `Quay Pro（本地功能）`。
 - IAP Description 与 App Store 截图文案不得暗示永久免费，也不得暗示未来 cloud 二档包含在首发 Pro 中。
 - **价格只有一个真实源**：所有「后续费用」展示一律取 StoreKit `proProduct.displayPrice`（已本地化、含币种），**禁止**在代码、文案、商店截图里写死数字。截图若必须出现价格，用「限时首发价」类不绑定具体金额的措辞，避免调价后与 ASC 不一致触发审核/退款/信任问题。
 - **开始试用前必须已加载 trial 与 pro 两个 Product**：trial 用于发起 Tier 0 购买，pro 用于展示 `displayPrice`。若 `proProduct.displayPrice` 不可用，不能让用户开始试用；应显示「正在加载价格 / 重试」并禁用开始试用按钮。否则 3.1.1 的「试用前告知后续费用」会失效。
@@ -190,7 +190,7 @@ struct Entitlements: Sendable {
 
 ### Step 3 — ASC 与本地 StoreKit 配置
 - **目标**：可在 ASC 提交、可在本地测试。
-- **改动**：ASC 建两个 IAP：`com.swiftftp.app.trial7`（Tier 0 Non-Consumable，Display Name 形如 `7-Day Trial`，**Family Sharing 保持关闭且不要误点开启**）；`com.swiftftp.app.pro`（付费 Non-Consumable，Display Name `SwiftFTP Pro`，Family Sharing 可开启但**一旦开启不可关闭**，需在提交前明确接受）。两个 IAP 必须随首个引用它们的版本一同送审。新增仓库内 `.storekit` 配置文件用于本地无 ASC 测试，并在 Xcode scheme 中选择该 StoreKit Configuration。
+- **改动**：ASC 建两个 IAP：`com.swiftftp.app.trial7`（Tier 0 Non-Consumable，Display Name 形如 `7-Day Trial`，**Family Sharing 保持关闭且不要误点开启**）；`com.swiftftp.app.pro`（付费 Non-Consumable，Display Name `Quay Pro`，Family Sharing 可开启但**一旦开启不可关闭**，需在提交前明确接受）。两个 IAP 必须随首个引用它们的版本一同送审。新增仓库内 `.storekit` 配置文件用于本地无 ASC 测试，并在 Xcode scheme 中选择该 StoreKit Configuration。
 - **交付物**：ASC 两个 IAP 配置；每个 IAP 的 App Review Screenshot 与 Review Notes；仓库内 `SwiftFTP.storekit`（含 trial7 与 pro，trial 周期便于压缩测试）。
 - **测试**：Xcode StoreKit 配置可加载、两商品可见、本地 trial 购买不计费、scheme 确认使用该 `.storekit` 文件。
 - **下一步**：Step 4。
@@ -229,7 +229,7 @@ struct Entitlements: Sendable {
 | 5 | 试用期内删除并重装 | 试用按**原 purchaseDate** 续算，**不重置** |
 | 6 | 第 30 天恢复购买（仅试用过） | 显示**已过期**，不发放新的 7 天 |
 | 7 | 审核账号已消耗过 trial | 落锁定态，但 App 完整、文案可理解、可购买/恢复 |
-| 8 | 从过期态购买 `SwiftFTP Pro` | 永久解锁首发本地核心功能 |
+| 8 | 从过期态购买 `Quay Pro` | 永久解锁首发本地核心功能 |
 | 9 | Pro 退款/撤销（`revocationDate`） | 访问权按规则收回 |
 | 10 | 离线/StoreKit 不可达启动（曾解析为有权） | 不变砖，沿用本会话结果，提供重试/恢复 |
 | 11 | 冷启动 + 离线 + 无任何缓存 | 锁定但提供「重试/恢复购买」出路 |
@@ -254,4 +254,4 @@ struct Entitlements: Sendable {
 
 ## 9. 审核提交备注（Review Notes 模板）
 
-> SwiftFTP 采用 App Review Guideline 3.1.1 指定的 Tier 0 Non-Consumable 试用路径。`com.swiftftp.app.trial7` 为 Price Tier 0 免费试用券（7 天，Display Name: `7-Day Trial`），`com.swiftftp.app.pro` 为一次性 `SwiftFTP Pro` 解锁，覆盖首发本地 FTP/FTPS/SFTP 客户端核心功能。试用前界面已明确披露试用时长、到期锁定的功能、后续一次性费用。试用到期后 App 不变砖：用户仍可查看与导出（非敏感）服务器配置、删除数据、购买与恢复。若审核账号此前已领取过该 Tier 0 试用券，将直接进入锁定态——这是 Non-Consumable「每 Apple ID 一次」的预期行为；锁定态本身可完整审核购买/恢复路径。如需体验首次试用态，可使用未消耗过 trial 的干净 Sandbox 账号。
+> Quay 采用 App Review Guideline 3.1.1 指定的 Tier 0 Non-Consumable 试用路径。`com.swiftftp.app.trial7` 为 Price Tier 0 免费试用券（7 天，Display Name: `7-Day Trial`），`com.swiftftp.app.pro` 为一次性 `Quay Pro` 解锁，覆盖首发本地 FTP/FTPS/SFTP 客户端核心功能。试用前界面已明确披露试用时长、到期锁定的功能、后续一次性费用。试用到期后 App 不变砖：用户仍可查看与导出（非敏感）服务器配置、删除数据、购买与恢复。若审核账号此前已领取过该 Tier 0 试用券，将直接进入锁定态——这是 Non-Consumable「每 Apple ID 一次」的预期行为；锁定态本身可完整审核购买/恢复路径。如需体验首次试用态，可使用未消耗过 trial 的干净 Sandbox 账号。

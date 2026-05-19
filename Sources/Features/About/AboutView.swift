@@ -30,14 +30,14 @@ struct AboutView: View {
                 .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
 
             VStack(spacing: 6) {
-                Text("SwiftFTP")
+                Text("Quay")
                     .font(.system(size: 30, weight: .semibold))
                 Text("版本 \(appVersion)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
-            Text("SwiftFTP 是一个面向 macOS 的轻量 FTP / FTPS / SFTP 客户端，专注于安全保存凭据、快速文件传输和常用目录同步。")
+            Text("Quay 是一个面向 macOS 的轻量 FTP / FTPS / SFTP 文件传输客户端，专注于安全保存凭据、快速传输和常用目录实时同步。")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

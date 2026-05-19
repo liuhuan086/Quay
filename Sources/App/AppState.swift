@@ -44,9 +44,9 @@ enum LaunchAtLoginState: Equatable {
     var message: String {
         switch self {
         case .disabled:
-            return "SwiftFTP 不会在你登录 macOS 时自动启动。"
+            return "Quay 不会在你登录 macOS 时自动启动。"
         case .enabled:
-            return "SwiftFTP 会在你登录 macOS 时自动启动。"
+            return "Quay 会在你登录 macOS 时自动启动。"
         case .requiresApproval:
             return "已请求登录时启动，但还需要在系统设置的登录项中允许。"
         case .unavailable:
@@ -253,7 +253,7 @@ final class AppState: ObservableObject {
             if launchAtLoginState.needsApproval {
                 alertItem = AlertItem(
                     title: "需要允许登录项",
-                    message: "请在系统设置的“登录项”中允许 SwiftFTP，之后它会在登录 macOS 时自动启动。"
+                message: "请在系统设置的“登录项”中允许 Quay，之后它会在登录 macOS 时自动启动。"
                 )
             }
         } catch {
@@ -316,7 +316,7 @@ final class AppState: ObservableObject {
         if !credentialCleared {
             alertItem = AlertItem(
                 title: "服务器已删除",
-                message: "已移除该服务器，但保存在 Keychain 中的密码未能清除。SwiftFTP 会阻止该残留项被自动复用，你也可以在“钥匙串访问”中手动删除。"
+                message: "已移除该服务器，但保存在 Keychain 中的密码未能清除。Quay 会阻止该残留项被自动复用，你也可以在“钥匙串访问”中手动删除。"
             )
         }
     }
@@ -658,11 +658,11 @@ final class AppState: ObservableObject {
     private var lockedFeatureMessage: String {
         switch entitlementStatus {
         case .neverStarted:
-            return "开始 7 天完整试用，或一次性购买 SwiftFTP Pro 后，可以连接、上传、下载和使用实时同步。"
+            return "开始 7 天完整试用，或一次性购买 Quay Pro 后，可以连接、上传、下载和使用实时同步。"
         case .trialExpired:
             return "试用结束后，连接、上传、下载、实时同步和新建/编辑服务器会被锁定。你的服务器配置与本地数据不会被删除，可继续查看与导出。"
         case .entitlementUnknown:
-            return "SwiftFTP 暂时无法校验购买状态。请重试校验或恢复购买；已购买用户不会丢失服务器配置。"
+            return "Quay 暂时无法校验购买状态。请重试校验或恢复购买；已购买用户不会丢失服务器配置。"
         case .trialActive, .pro:
             return "请稍后重试。"
         }

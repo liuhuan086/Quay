@@ -1,4 +1,4 @@
-# SwiftFTP 发布验证
+# Quay 发布验证
 
 在提交 Mac App Store 构建之前运行此检查清单。
 ## 构建与签名
@@ -33,7 +33,7 @@ codesign -d --entitlements - /private/tmp/SwiftFTP.xcarchive/Products/Applicatio
 
 使用产品 ID：
 - `com.swiftftp.app.trial7`：Tier 0 非消耗型，显示名 `7-Day Trial`，关闭 Family Sharing。
-- `com.swiftftp.app.pro`：付费非消耗型，显示名 `SwiftFTP Pro`。
+- `com.swiftftp.app.pro`：付费非消耗型，显示名 `Quay Pro`。
 
 1. 在 App Store Connect 中创建两个 IAP，并将它们添加到与第一个引用它们的二进制文件相同的 app 版本提交中。
 2. 为两个 IAP 添加 App Review 截图与审核备注。
@@ -45,7 +45,7 @@ codesign -d --entitlements - /private/tmp/SwiftFTP.xcarchive/Products/Applicatio
    - 开始试用前必须显示披露页，并创建 trial 交易。
    - 试用到期按原始 StoreKit 购买日期计算；重装/恢复不会重置试用。
    - 试用过期进入非变砖锁定壳：配置可查看/导出，但连接/上传/下载/同步被锁定。
-   - 购买 `SwiftFTP Pro` 后立即解锁核心 FTP/FTPS/SFTP 功能。
+   - 购买 `Quay Pro` 后立即解锁核心 FTP/FTPS/SFTP 功能。
    - 删除/重新安装应用后，恢复购买可以解锁 Pro。
    - 用户取消购买后，应用返回但不解锁 Pro。
    - Ask to Buy pending 状态显示等待批准，不解锁新能力，只有 `Transaction.updates` / `currentEntitlements` 返回 verified transaction 后才解锁。
@@ -72,7 +72,7 @@ SFTP 特定：
 1. 密码认证正常工作。
 2. 选择密钥后 SSH 密钥认证正常工作。
 3. 重启应用后，使用相同的 SSH 密钥重新连接而无需重新选择。
-4. 更改服务器主机密钥并确认 SwiftFTP 阻止连接。
+4. 更改服务器主机密钥并确认 Quay 阻止连接。
 
 沙盒文件访问：
 1. 在浏览器中选择一个本地文件夹并验证重启后仍保留。

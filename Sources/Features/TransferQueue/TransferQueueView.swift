@@ -471,7 +471,7 @@ struct WelcomeView: View {
                 .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
 
             VStack(spacing: 6) {
-                Text("SwiftFTP").font(.largeTitle).bold()
+                Text("Quay").font(.largeTitle).bold()
                 Text("macOS FTP / SFTP 客户端").foregroundColor(.secondary)
             }
 
@@ -551,7 +551,7 @@ struct SettingsRootView: View {
                     }
                     .disabled(!appState.hasFullAccess)
                 Toggle(
-                    "登录时启动 SwiftFTP",
+                    "登录时启动 Quay",
                     isOn: Binding(
                         get: { appState.launchAtLoginState.isToggleOn },
                         set: { appState.setLaunchAtLoginEnabled($0) }
@@ -588,7 +588,7 @@ struct SettingsRootView: View {
 
             Form {
                 if appState.isPro {
-                    Label("已解锁 SwiftFTP Pro", systemImage: "checkmark.seal.fill")
+                    Label("已解锁 Quay Pro", systemImage: "checkmark.seal.fill")
                         .foregroundColor(.green)
                     Text("本地 FTP/FTPS/SFTP 核心功能已启用。")
                         .foregroundColor(.secondary)
@@ -654,9 +654,9 @@ struct SettingsRootView: View {
 
     private var proButtonTitle: String {
         if let price = appState.storeManager.proDisplayPrice {
-            return "购买 SwiftFTP Pro - \(price)"
+            return "购买 Quay Pro - \(price)"
         }
-        return "购买 SwiftFTP Pro"
+        return "购买 Quay Pro"
     }
 
     private var purchaseStatusText: String {
@@ -665,7 +665,7 @@ struct SettingsRootView: View {
             let price = appState.storeManager.proDisplayPrice ?? "正在加载价格"
             return "7 天完整试用可使用全部本地 FTP/FTPS/SFTP 功能；试用结束后需要一次性购买 \(price) 解锁，无订阅。"
         case .trialExpired:
-            return "7 天试用已结束。服务器配置仍可查看与导出，连接、上传、下载和实时同步需要 SwiftFTP Pro。"
+            return "7 天试用已结束。服务器配置仍可查看与导出，连接、上传、下载和实时同步需要 Quay Pro。"
         case .entitlementUnknown:
             return "暂时无法校验购买状态。请重试或恢复购买。"
         case .trialActive, .pro:
