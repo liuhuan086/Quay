@@ -12,6 +12,7 @@
 后续任何 AI 会话在本仓库做变现/IAP/门控相关改动时，必须遵守：
 
 - **禁止**重新引入 `UserDefaults.trialStartedAt` 作为试用授权依据。试用有效期的唯一真相是 StoreKit 交易的 `purchaseDate + 7 天`。`trialStartedAt` 持久化逻辑应被删除（见 Step 4）。
+- 允许持久化**非授权用途**的 UI 状态（如 `hasSeenOnboarding`、到期前提醒已展示），但必须命名清楚、只影响 UI，不得参与 `canUseCoreFTP` / 试用期限判断。
 - **禁止**把过期态做成「降级但仍可用」的免费层。过期态边界必须精确：数据可读、可导出非敏感配置、可购买/恢复；连接/上传/下载/同步/新建任务一律锁定。漂移成可用免费层 = 同时拿到 trial 与 freemium 两个模型的缺点。
 - **禁止**「擅自修复」已登记的既定风险（见 §6 Accepted Risks），尤其是本地时钟回拨延长试用——这是已知并接受的取舍，不要为它加服务器校验或复杂逻辑。
 - **禁止**用重复弹窗/模态骚扰催付。允许的仅限：①一个常驻、非模态的「试用剩余 X 天」可视提示；②到期前**最多一次**温和提醒；③到期锁定那一刻。除此之外不得有任何重复模态。详见 §2.1。这同时是 App Review（4.x dark pattern / 3.1.1）与评分风险。
@@ -46,10 +47,10 @@
 试用模型的结构性缺陷：用户在 7 天内拥有完整功能，**永远不会撞墙**，直到第 8 天一次性全锁。如果到期前零提示，等于把唯一的转化机会全部押在「锁定那一刻的挫败感」上——这既转化更差，也更容易招差评。必须在试用期内做**克制的**转化铺垫：
 
 - **常驻可视提示**：一个非模态的「试用剩余 X 天」入口（如状态栏/侧栏角标或设置内标签），任何时候不打断操作。文案中性，不诱导。
-- **到期前一次温和提醒**：剩余约 24–48 小时时，出现**一次**非阻断提示，说明何时锁定哪些功能、解锁价格与入口。仅一次，关闭后不再弹。
+- **到期前一次温和提醒**：剩余约 24–48 小时时，出现**一次**非阻断的应用内提示，说明何时锁定哪些功能、解锁价格与入口。仅一次，关闭后不再弹；可以用 `UserDefaults` 持久化「某个 trial transaction 已提醒」这类 UI flag，但它不得参与授权判断。
 - **撞墙那一刻**：进入 §4 非变砖锁定态，提供购买/恢复。
 - 以上三处的「剩余天数 / 是否试用中」必须读统一 `Entitlements`（§3.2），不得各处自行 `Date()` 比较。
-- 明确**禁止**：每次启动弹窗、每次传输后弹窗、倒计时恐吓文案、把剩余天数做成模态拦截。违反即 §0 硬约束与 4.x dark pattern 风险。
+- 明确**禁止**：每次启动弹窗、每次传输后弹窗、倒计时恐吓文案、把剩余天数做成模态拦截、用系统通知做纯催付。违反即 §0 硬约束与 4.x dark pattern 风险。
 
 ---
 
@@ -65,7 +66,12 @@
 | `pro` | pro 交易存在 且 `revocationDate == nil` | 完整功能（永久） |
 | `entitlementUnknown` | 权益解析无法得到 verified StoreKit 结果（例如 StoreKit/验证异常、超时、只有 unverified transaction），且无法判断用户是否有权 | 不得变砖：允许进入、显示「无法校验购买」提示、提供「重试 / 恢复购买」。若本会话已有 verified 解析结果，沿用该内存结果；冷启动无结果时进入锁定壳但不得空白付费墙 |
 
-**状态解析必须有确定优先级（防分叉 bug）**：`pro` ＞ `trialActive` ＞ `trialExpired` ＞ `neverStarted` ＞ `entitlementUnknown`。即「持有 pro 且同时有已过期 trial 交易」必须解析为 `pro`；「有 trial 交易但已过期且无 pro」才是 `trialExpired`。能力门控只看 `canUseCoreFTP`；状态枚举仅用于 UI/Onboarding 路由，二者不得各自判断。
+**状态解析必须分两层（防分叉 bug）**：
+
+1. 先判断是否拿到了一个可信的 verified entitlement snapshot。成功拿到（哪怕结果为空）才进入业务状态解析；拿不到则是 `entitlementUnknown`，不得伪装成 `neverStarted`。
+2. 在 verified snapshot 内部按确定优先级解析：`pro` ＞ `trialActive` ＞ `trialExpired` ＞ `neverStarted`。即「持有 pro 且同时有已过期 trial 交易」必须解析为 `pro`；「有 trial 交易但已过期且无 pro」才是 `trialExpired`；「verified snapshot 为空」才是 `neverStarted`。
+
+能力门控只看 `canUseCoreFTP`；状态枚举仅用于 UI/Onboarding 路由，二者不得各自判断。
 
 ### 3.2 能力解析（统一出口，预留二档）
 
@@ -111,6 +117,7 @@ struct Entitlements: Sendable {
 
 - 删除 `trialStartedAt` 持久化后，授权改为：每次启动优先 `refreshEntitlements()`；解析结果存**内存**（本会话），不落盘自制试用日期。
 - 不要把 `Product.products(for:)` 失败等同于无权益。商品加载失败只影响购买按钮/价格显示；权益解析仍应先走 `Transaction.currentEntitlements` / `Transaction.updates`。
+- 必须区分「verified entitlement snapshot 为空」与「无法获得 verified snapshot」：前者是 `neverStarted`，后者才是 `entitlementUnknown`。
 - StoreKit/验证异常导致无法解析 verified entitlement 时，进入 `entitlementUnknown`，**不得锁死**。沿用本会话已解析结果；冷启动且无任何结果时默认锁定但**必须**给「重试 / 恢复购买」动线，不得让可能已付费用户无出路。
 - 如果 StoreKit 返回本机缓存的 verified non-consumable transaction，即使网络不可达，也按官方交易结果授权；不要额外要求联网。
 
@@ -143,6 +150,7 @@ struct Entitlements: Sendable {
 - IAP Display Name：trial 商品在所有本地化中必须保留 `7-Day Trial` 语义（例如 `7-Day Trial` 或 `7-Day Trial（7 天试用）`，注意 ASC display name 长度限制）；Pro 商品避免 `Full Unlock`，用 `SwiftFTP Pro` / `SwiftFTP Pro（本地功能）`。
 - IAP Description 与 App Store 截图文案不得暗示永久免费，也不得暗示未来 cloud 二档包含在首发 Pro 中。
 - **价格只有一个真实源**：所有「后续费用」展示一律取 StoreKit `proProduct.displayPrice`（已本地化、含币种），**禁止**在代码、文案、商店截图里写死数字。截图若必须出现价格，用「限时首发价」类不绑定具体金额的措辞，避免调价后与 ASC 不一致触发审核/退款/信任问题。
+- **开始试用前必须已加载 trial 与 pro 两个 Product**：trial 用于发起 Tier 0 购买，pro 用于展示 `displayPrice`。若 `proProduct.displayPrice` 不可用，不能让用户开始试用；应显示「正在加载价格 / 重试」并禁用开始试用按钮。否则 3.1.1 的「试用前告知后续费用」会失效。
 
 过期态文案：移除「永久免费」字样；说明锁定项与解锁方式；不得诱导性措辞。
 
@@ -188,7 +196,7 @@ struct Entitlements: Sendable {
 - **目标**：授权来源切到 StoreKit 交易，删除自制计时。
 - **改动**：`Sources/Core/Billing/StoreManager.swift`（新增 `trialProductID`；`refreshEntitlements()` 同时识别 trial/pro，trial 用 `purchaseDate + 7d` 算 `trialExpiresAt`，pro 看 `revocationDate`；产出 §3.2 `Entitlements`；`Transaction.updates` 同时处理 trial/pro/未来 cloud；购买成功后 `finish()`）；`Sources/App/AppState.swift`（删除 `trialStartedAt` 及其 `didSet`/`trialStartedAtKey`/`wireTrialTimer` 中对持久化的依赖；`hasFullAccess` 改为读统一 capability；实现 §3.3 离线策略——内存缓存、不落盘自制日期、`entitlementUnknown` 不变砖）。
 - **交付物**：双商品 StoreManager；统一 capability 出口；离线/失败兜底逻辑；可测试 clock。
-- **测试**（含 §8 矩阵）：单测覆盖能力解析（trial 未过期/已过期/已撤销/pro/二者皆无/StoreKit 失败兜底）；**状态优先级**（pro+已过期 trial 必解析为 pro，矩阵 #19）；覆盖 `Transaction.updates` 后状态刷新；确认全仓无 `trialStartedAt` 持久读写。
+- **测试**（含 §8 矩阵）：单测覆盖能力解析（trial 未过期/已过期/已撤销/pro/二者皆无/StoreKit 失败兜底）；**状态优先级**（pro+已过期 trial 必解析为 pro，矩阵 #19）；verified 空 snapshot 与解析失败的分流（#21）；覆盖 `Transaction.updates` 后状态刷新；确认全仓无 `trialStartedAt` 持久读写。
 - **下一步**：Step 5。
 
 ### Step 5 — 重做首启 Onboarding
@@ -231,6 +239,9 @@ struct Entitlements: Sendable {
 | 18 | Onboarding 关闭但未开始试用/未购买 | 落非变砖锁定壳（含开始试用/购买/恢复），无空白页、无纯付费墙 |
 | 19 | 同时持有 pro 与已过期 trial 交易 | 解析为 `pro`，完整功能，不显示过期态 |
 | 20 | 价格展示 | 全部来自 StoreKit `displayPrice`；代码/截图无写死金额 |
+| 21 | verified entitlement snapshot 为空 vs 获取失败 | 空 snapshot → `neverStarted`；获取/验证失败 → `entitlementUnknown` |
+| 22 | Pro 价格未加载时尝试开始试用 | 开始试用按钮禁用，提示加载/重试；不得在价格未知时发起 trial 购买 |
+| 23 | 到期前提醒已展示 flag | 可持久化 UI flag；删除/篡改 flag 不影响 `canUseCoreFTP` |
 
 ---
 
