@@ -78,7 +78,7 @@ final class LocalFileVM: ObservableObject {
         } else {
             requestDirectoryAccess(
                 suggestedPath: normalizedPath,
-                message: "SwiftFTP 需要你授权访问此目录或它的上级目录。"
+                message: "Quay 需要你授权访问此目录或它的上级目录。"
             )
         }
     }
@@ -123,14 +123,14 @@ final class LocalFileVM: ObservableObject {
         shouldOfferInitialAccess = false
         requestDirectoryAccess(
             suggestedPath: pendingAccessPath ?? preferredUserDirectoryPath,
-            message: "请选择一个本地目录，授权 SwiftFTP 浏览、上传和下载文件。"
+            message: "请选择一个本地目录，授权 Quay 浏览、上传和下载文件。"
         )
     }
 
     func requestDirectoryAccess() {
         requestDirectoryAccess(
             suggestedPath: pendingAccessPath ?? currentPath,
-            message: "请选择要授权 SwiftFTP 访问的本地目录。"
+            message: "请选择要授权 Quay 访问的本地目录。"
         )
     }
 
