@@ -80,20 +80,11 @@ final class AppState: ObservableObject {
     @Published var syncWatchers: [UUID: SyncWatcher] = [:]
     @Published var selectedServerID: UUID?
     @Published var alertItem: AlertItem?
+    @Published var trialReminder: TrialReminder?
     @Published var lastCompletedTransferServerID: UUID?
     @Published var isAddServerPresented = false
     @Published var isAboutPresented = false
-    @Published var isPro = false
     @Published var launchAtLoginState: LaunchAtLoginState = .current()
-    @Published var trialStartedAt: Date? {
-        didSet {
-            if let trialStartedAt {
-                UserDefaults.standard.set(trialStartedAt, forKey: trialStartedAtKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: trialStartedAtKey)
-            }
-        }
-    }
     @Published private var entitlementRefreshDate = Date()
     @Published var hasSeenOnboarding: Bool {
         didSet { UserDefaults.standard.set(hasSeenOnboarding, forKey: hasSeenOnboardingKey) }
@@ -106,8 +97,7 @@ final class AppState: ObservableObject {
     let storeManager = StoreManager()
     private let syncWatchersKey = "swiftftp.v2.syncWatchers"
     private let hasSeenOnboardingKey = "hasSeenOnboarding"
-    private let trialStartedAtKey = "trialStartedAt"
-    private let trialLength: TimeInterval = 7 * 24 * 60 * 60
+    private let trialExpiryReminderShownKeyPrefix = "swiftftp.ui.trialExpiryReminderShown."
 
     // Transfer engine (actor)
     let engine = TransferEngine()
@@ -115,18 +105,19 @@ final class AppState: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var scopedTransferAccessURLsByTaskID: [UUID: URL] = [:]
     private var activeScopedTransferURLsByTaskID: [UUID: URL] = [:]
+    private var lastCanUseCoreFTP = false
 
     // MARK: - Init
     init() {
         hasSeenOnboarding = UserDefaults.standard.bool(forKey: hasSeenOnboardingKey)
-        trialStartedAt = UserDefaults.standard.object(forKey: trialStartedAtKey) as? Date
         loadServers()
         Task { await migrateLegacyServerPasswordsIfNeeded() }
         loadSyncWatchers()
         wireEngine()
         wireStore()
-        wireTrialTimer()
+        wireEntitlementTimer()
         applyTransferConcurrency()
+        lastCanUseCoreFTP = canUseCoreFTP
         refreshLaunchAtLoginStatus()
     }
 
@@ -139,11 +130,8 @@ final class AppState: ObservableObject {
     }
 
     func presentAddServer() {
-        guard hasFullAccess else {
-            alertItem = AlertItem(
-                title: "试用已结束",
-                message: "SwiftFTP 不提供永久免费版。请开始 7 天试用或购买 Pro 后继续使用。"
-            )
+        guard canUseCoreFTP else {
+            showCoreFeatureLockedAlert()
             return
         }
         isAddServerPresented = true
@@ -163,8 +151,8 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func saveServer(_ config: ServerConfig) async -> Bool {
-        guard hasFullAccess || servers.contains(where: { $0.id == config.id }) else {
-            alertItem = AlertItem(title: "试用已结束", message: "请购买 Pro 后保存服务器配置。")
+        guard canUseCoreFTP else {
+            showCoreFeatureLockedAlert()
             return false
         }
         do {
@@ -177,18 +165,33 @@ final class AppState: ObservableObject {
         }
     }
 
+    var entitlementStatus: EntitlementStatus {
+        _ = entitlementRefreshDate
+        if storeManager.entitlementStatus == .entitlementUnknown {
+            return .entitlementUnknown
+        }
+        return storeManager.entitlements.status(now: Date())
+    }
+
+    var canUseCoreFTP: Bool {
+        _ = entitlementRefreshDate
+        return storeManager.entitlements.canUseCoreFTP(now: Date())
+    }
+
     var hasFullAccess: Bool {
-        isPro || isTrialActive
+        canUseCoreFTP
+    }
+
+    var isPro: Bool {
+        storeManager.entitlements.hasPro
     }
 
     var isTrialActive: Bool {
-        guard let trialStartedAt else { return false }
-        _ = entitlementRefreshDate
-        return Date().timeIntervalSince(trialStartedAt) < trialLength
+        entitlementStatus == .trialActive
     }
 
     var trialEndsAt: Date? {
-        trialStartedAt?.addingTimeInterval(trialLength)
+        storeManager.entitlements.trialExpiresAt
     }
 
     var trialDaysRemaining: Int {
@@ -198,11 +201,34 @@ final class AppState: ObservableObject {
         return max(0, Int(ceil(remaining / (24 * 60 * 60))))
     }
 
-    func startTrial() {
-        guard trialStartedAt == nil else { return }
-        trialStartedAt = Date()
+    var shouldShowOnboarding: Bool {
+        !hasSeenOnboarding
+            && storeManager.hasCompletedInitialEntitlementRefresh
+            && entitlementStatus == .neverStarted
+    }
+
+    @discardableResult
+    func startTrial() async -> Bool {
+        let didBegin = await storeManager.purchaseTrial()
         entitlementRefreshDate = Date()
         applyTransferConcurrency()
+        return didBegin
+    }
+
+    @discardableResult
+    func purchasePro() async -> Bool {
+        let didPurchase = await storeManager.purchasePro()
+        entitlementRefreshDate = Date()
+        applyTransferConcurrency()
+        return didPurchase
+    }
+
+    @discardableResult
+    func restorePurchases() async -> Bool {
+        let didRestore = await storeManager.restorePurchases()
+        entitlementRefreshDate = Date()
+        applyTransferConcurrency()
+        return didRestore
     }
 
     func updateTransferConcurrencyPreference(_ value: Int) {
@@ -244,6 +270,10 @@ final class AppState: ObservableObject {
     }
 
     func updateServer(_ config: ServerConfig) async {
+        guard canUseCoreFTP else {
+            showCoreFeatureLockedAlert()
+            return
+        }
         do {
             try await repository.update(config, credentialPolicy: .replaceIfNonEmpty)
             if !config.password.isEmpty {
@@ -323,21 +353,24 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
-        storeManager.$isPro
+        storeManager.$entitlements
             .receive(on: RunLoop.main)
-            .sink { [weak self] value in
-                self?.isPro = value
+            .sink { [weak self] _ in
+                self?.entitlementRefreshDate = Date()
                 self?.applyTransferConcurrency()
+                self?.handleCoreAccessTransition()
             }
             .store(in: &cancellables)
     }
 
-    private func wireTrialTimer() {
+    private func wireEntitlementTimer() {
         Timer.publish(every: 60, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] now in
                 self?.entitlementRefreshDate = now
                 self?.applyTransferConcurrency()
+                self?.evaluateTrialExpiryReminder()
+                self?.handleCoreAccessTransition()
             }
             .store(in: &cancellables)
     }
@@ -345,12 +378,42 @@ final class AppState: ObservableObject {
     private func applyTransferConcurrency() {
         let saved = UserDefaults.standard.integer(forKey: "maxConcurrent")
         let requested = saved > 0 ? saved : 3
-        let effective = hasFullAccess ? requested : 1
+        let effective = canUseCoreFTP ? requested : 1
         Task { await engine.updateConcurrent(effective) }
+    }
+
+    private func handleCoreAccessTransition() {
+        let hasAccess = canUseCoreFTP
+        defer { lastCanUseCoreFTP = hasAccess }
+        guard lastCanUseCoreFTP && !hasAccess else { return }
+        lockCurrentCoreFeatureSession()
+    }
+
+    private func lockCurrentCoreFeatureSession() {
+        let connectedServerIDs = connectionStates.compactMap { id, state in
+            state.isConnected ? id : nil
+        }
+        for id in connectedServerIDs {
+            connectionStates[id] = .disconnected
+        }
+
+        let unfinishedTransferIDs = Set(transfers.filter { !$0.status.isCompletedOrCancelled }.map(\.id))
+        Task {
+            for id in connectedServerIDs {
+                await ConnectionPoolRegistry.shared.removePool(for: id)
+            }
+            if !unfinishedTransferIDs.isEmpty {
+                await engine.pause(ids: unfinishedTransferIDs)
+            }
+        }
     }
 
     // MARK: - Connection
     func connect(to server: ServerConfig) async {
+        guard canUseCoreFTP else {
+            showCoreFeatureLockedAlert()
+            return
+        }
         connectionStates[server.id] = .connecting
         do {
             var connectionConfig = server
@@ -385,6 +448,10 @@ final class AppState: ObservableObject {
         batchID: UUID? = nil,
         securityScopedURL: URL? = nil
     ) async {
+        guard canUseCoreFTP else {
+            showCoreFeatureLockedAlert()
+            return
+        }
         let size = fileSize ?? localFileSize(
             for: localURL,
             securityScopedURL: direction == .upload ? securityScopedURL : nil
@@ -467,6 +534,10 @@ final class AppState: ObservableObject {
     }
 
     func resumeTransfers(matching selection: Set<UUID>) async {
+        guard canUseCoreFTP else {
+            showCoreFeatureLockedAlert()
+            return
+        }
         await engine.resume(ids: taskIDs(matching: selection))
     }
 
@@ -475,12 +546,20 @@ final class AppState: ObservableObject {
     }
 
     func startOrRetryTransfers(matching selection: Set<UUID>) async {
+        guard canUseCoreFTP else {
+            showCoreFeatureLockedAlert()
+            return
+        }
         let ids = taskIDs(matching: selection)
         beginLocalTransferAccessIfNeeded(for: transfers.filter { ids.contains($0.id) })
         await engine.startOrRetry(ids: ids)
     }
 
     func startOrRetryUnfinishedTransfers() async {
+        guard canUseCoreFTP else {
+            showCoreFeatureLockedAlert()
+            return
+        }
         let ids = Set(transfers.filter { $0.status.isUnfinished }.map(\.id))
         beginLocalTransferAccessIfNeeded(for: transfers.filter { ids.contains($0.id) })
         await engine.startOrRetry(ids: ids)
@@ -556,6 +635,62 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Alerts
+    func showCoreFeatureLockedAlert() {
+        alertItem = AlertItem(
+            title: lockedFeatureTitle,
+            message: lockedFeatureMessage
+        )
+    }
+
+    private var lockedFeatureTitle: String {
+        switch entitlementStatus {
+        case .neverStarted:
+            return "开始试用后可使用"
+        case .trialExpired:
+            return "试用已结束"
+        case .entitlementUnknown:
+            return "无法校验购买"
+        case .trialActive, .pro:
+            return "功能暂不可用"
+        }
+    }
+
+    private var lockedFeatureMessage: String {
+        switch entitlementStatus {
+        case .neverStarted:
+            return "开始 7 天完整试用，或一次性购买 SwiftFTP Pro 后，可以连接、上传、下载和使用实时同步。"
+        case .trialExpired:
+            return "试用结束后，连接、上传、下载、实时同步和新建/编辑服务器会被锁定。你的服务器配置与本地数据不会被删除，可继续查看与导出。"
+        case .entitlementUnknown:
+            return "SwiftFTP 暂时无法校验购买状态。请重试校验或恢复购买；已购买用户不会丢失服务器配置。"
+        case .trialActive, .pro:
+            return "请稍后重试。"
+        }
+    }
+
+    private func evaluateTrialExpiryReminder() {
+        guard entitlementStatus == .trialActive,
+              let trialEndsAt,
+              trialReminder == nil else { return }
+        let remaining = trialEndsAt.timeIntervalSince(Date())
+        guard remaining > 0, remaining <= 48 * 60 * 60 else { return }
+
+        let key = trialExpiryReminderShownKey(for: trialEndsAt)
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        trialReminder = TrialReminder(
+            message: "7 天试用将在约 \(trialDaysRemaining) 天后结束。到期后连接、上传、下载和实时同步会锁定，服务器配置仍可查看与导出。"
+        )
+    }
+
+    private func trialExpiryReminderShownKey(for date: Date) -> String {
+        trialExpiryReminderShownKeyPrefix + String(Int(date.timeIntervalSince1970))
+    }
+
+    func dismissTrialReminder() {
+        trialReminder = nil
+    }
+
     func showError(_ error: Error) {
         if let localized = error as? LocalizedError,
            let description = localized.errorDescription {
@@ -627,6 +762,11 @@ final class AppState: ObservableObject {
 struct AlertItem: Identifiable {
     let id = UUID()
     let title: String
+    let message: String
+}
+
+struct TrialReminder: Identifiable {
+    let id = UUID()
     let message: String
 }
 

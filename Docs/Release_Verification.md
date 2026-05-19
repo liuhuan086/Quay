@@ -56,6 +56,14 @@ Use product IDs:
    - Pending Ask to Buy purchase shows a waiting state, does not unlock new capabilities, and unlocks only after `Transaction.updates` / `currentEntitlements` delivers a verified transaction.
    - Interrupted purchases are recovered through `Transaction.unfinished` and finished after entitlement delivery.
    - Failure messages are understandable and provide retry/restore paths.
+   - The 24–48 hour trial reminder appears at most once for a given trial expiry and is non-modal.
+   - Closing Onboarding without starting trial or buying Pro lands in the same non-bricking locked shell.
+   - A user with Pro plus an expired trial resolves to `pro`, not `trialExpired`.
+   - Code and screenshots do not hardcode a concrete Pro price; in-app price text comes from StoreKit `displayPrice`.
+   - Verified empty entitlement snapshot resolves to `neverStarted`; verification failure or only unverified known transactions resolves to `entitlementUnknown`.
+   - Trial start is disabled while either trial product or Pro price is unavailable.
+   - Editing/importing/new server creation remains locked after expiry; exporting non-sensitive JSON remains available.
+   - `Transaction.unfinished` with an unverified or unknown product ID does not unlock capability and is not silently finished.
 
 ## Protocol Smoke Tests
 

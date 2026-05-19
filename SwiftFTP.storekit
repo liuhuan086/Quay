@@ -1,0 +1,52 @@
+{
+  "products" : [
+    {
+      "displayPrice" : "0.00",
+      "familyShareable" : false,
+      "internalID" : "B5B0F2D7",
+      "localizations" : [
+        {
+          "description" : "7-day complete trial for SwiftFTP local FTP, FTPS, and SFTP features.",
+          "displayName" : "7-Day Trial",
+          "locale" : "en_US"
+        },
+        {
+          "description" : "SwiftFTP 本地 FTP、FTPS、SFTP 功能的 7 天完整试用。",
+          "displayName" : "7-Day Trial（7 天试用）",
+          "locale" : "zh_Hans"
+        }
+      ],
+      "productID" : "com.swiftftp.app.trial7",
+      "referenceName" : "7-Day Trial",
+      "type" : "NonConsumable"
+    },
+    {
+      "displayPrice" : "4.99",
+      "familyShareable" : false,
+      "internalID" : "C276D7C2",
+      "localizations" : [
+        {
+          "description" : "Unlocks SwiftFTP local FTP, FTPS, and SFTP client features.",
+          "displayName" : "SwiftFTP Pro",
+          "locale" : "en_US"
+        },
+        {
+          "description" : "解锁 SwiftFTP 本地 FTP、FTPS、SFTP 客户端功能。",
+          "displayName" : "SwiftFTP Pro（本地功能）",
+          "locale" : "zh_Hans"
+        }
+      ],
+      "productID" : "com.swiftftp.app.pro",
+      "referenceName" : "SwiftFTP Pro",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+  },
+  "subscriptionGroups" : [
+  ],
+  "version" : {
+    "major" : 1,
+    "minor" : 0
+  }
+}

@@ -170,6 +170,10 @@ final class RealtimeSyncViewModel: ObservableObject {
 
     // MARK: - Add watcher
     func addWatcher(localPath: String, localPathBookmark: Data, remotePath: String, excludePatterns: [String]) {
+        guard hasFullAccess else {
+            appState.showCoreFeatureLockedAlert()
+            return
+        }
         let w = SyncWatcher(
             id: UUID(), serverID: server.id, serverName: server.displayName,
             localPath: localPath, localPathBookmark: localPathBookmark, remotePath: remotePath,
@@ -183,6 +187,10 @@ final class RealtimeSyncViewModel: ObservableObject {
 
     // MARK: - Toggle active
     func toggle(_ watcher: SyncWatcher) {
+        guard hasFullAccess else {
+            appState.showCoreFeatureLockedAlert()
+            return
+        }
         guard let idx = watchers.firstIndex(where: { $0.id == watcher.id }) else { return }
         watchers[idx].isActive.toggle()
         appState.upsertSyncWatcher(watchers[idx])
@@ -290,7 +298,7 @@ struct RealtimeSyncView: View {
                 .foregroundStyle(.secondary)
             Text("试用或购买 Pro 后使用实时同步")
                 .font(.headline)
-            Text("SwiftFTP 不提供永久免费版。7 天试用期内可使用全部功能；试用结束后需要购买 Pro。")
+            Text("试用结束后，实时同步会锁定；服务器配置与同步规则仍保留，可在解锁后继续使用。")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

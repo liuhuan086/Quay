@@ -51,7 +51,7 @@ struct RootView: View {
     @State private var colVisibility = NavigationSplitViewVisibility.all
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             NavigationSplitView(columnVisibility: $colVisibility) {
                 SidebarView()
                     .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 360)
@@ -59,12 +59,22 @@ struct RootView: View {
                 DetailView()
             }
 
-            if !appState.hasSeenOnboarding {
-                OnboardingView(onFinish: { appState.completeOnboarding() })
+            if let reminder = appState.trialReminder {
+                TrialReminderBanner(reminder: reminder) {
+                    appState.dismissTrialReminder()
+                }
+                .padding(.top, 12)
+                .padding(.trailing, 16)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(8)
+            }
+
+            if !appState.hasSeenOnboarding && !appState.storeManager.hasCompletedInitialEntitlementRefresh {
+                EntitlementCheckingView()
                     .transition(.opacity)
                     .zIndex(10)
-            } else if !appState.hasFullAccess {
-                TrialPaywallView(appState: appState)
+            } else if appState.shouldShowOnboarding {
+                OnboardingView(appState: appState, onFinish: { appState.completeOnboarding() })
                     .transition(.opacity)
                     .zIndex(10)
             }
@@ -107,93 +117,271 @@ private struct GlobalAlertHost: View {
     }
 }
 
-private struct TrialPaywallView: View {
-    @ObservedObject var appState: AppState
-
+private struct EntitlementCheckingView: View {
     var body: some View {
         ZStack {
             Color(NSColor.windowBackgroundColor).ignoresSafeArea()
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("正在校验购买状态")
+                    .font(.headline)
+                Text("SwiftFTP 会先检查已有试用或 Pro 购买，再决定是否显示首次引导。")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+            .padding(28)
+        }
+    }
+}
 
-            VStack(spacing: 22) {
-                Image(systemName: "lock.open.display")
-                    .font(.system(size: 62, weight: .semibold))
+private struct TrialReminderBanner: View {
+    let reminder: TrialReminder
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "clock.badge.exclamationmark")
+                .foregroundStyle(.orange)
+                .font(.title3)
+            Text(reminder.message)
+                .font(.caption)
+                .foregroundColor(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+            .help("关闭")
+        }
+        .padding(12)
+        .frame(width: 360, alignment: .leading)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.secondary.opacity(0.18))
+        )
+        .shadow(color: .black.opacity(0.12), radius: 18, y: 8)
+    }
+}
+
+private struct LockedAccessView: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 18) {
+                Image(systemName: iconName)
+                    .font(.system(size: 42, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(iconColor)
+                    .frame(width: 54)
 
-                VStack(spacing: 8) {
-                    Text(paywallTitle)
-                        .font(.system(size: 30, weight: .semibold))
-                    Text(paywallSubtitle)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 24, weight: .semibold))
+                    Text(subtitle)
                         .font(.callout)
                         .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(3)
-                        .frame(maxWidth: 460)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer()
+            }
+            .padding(28)
 
-                VStack(spacing: 10) {
-                    if appState.trialStartedAt == nil {
-                        Button("开始 7 天试用") {
-                            appState.startTrial()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                    }
+            Divider()
 
-                    if appState.trialStartedAt == nil {
-                        Button("购买 Pro - $4.99") {
-                            Task { await appState.storeManager.purchasePro() }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        .disabled(appState.storeManager.isLoading)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    if let server = selectedServer {
+                        serverSummary(server)
                     } else {
-                        Button("购买 Pro - $4.99") {
-                            Task { await appState.storeManager.purchasePro() }
+                        emptySummary
+                    }
+
+                    disclosureBlock
+                    purchaseActions
+                    statusBlock
+                }
+                .padding(28)
+                .frame(maxWidth: 720, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    private var selectedServer: ServerConfig? {
+        guard let id = appState.selectedServerID else { return nil }
+        return appState.servers.first { $0.id == id }
+    }
+
+    private var title: String {
+        switch appState.entitlementStatus {
+        case .neverStarted:
+            return "开始 7 天完整试用"
+        case .trialExpired:
+            return "7 天试用已结束"
+        case .entitlementUnknown:
+            return "无法校验购买状态"
+        case .trialActive, .pro:
+            return "SwiftFTP Pro"
+        }
+    }
+
+    private var subtitle: String {
+        switch appState.entitlementStatus {
+        case .neverStarted:
+            return "开始试用前请确认：试用结束后，连接、上传、下载和实时同步会锁定；你的服务器配置与本地数据不会被删除，可继续查看与导出。"
+        case .trialExpired:
+            return "你仍可查看服务器配置、导出非敏感连接元数据、打开关于与设置；核心 FTP/FTPS/SFTP 操作需要 SwiftFTP Pro。"
+        case .entitlementUnknown:
+            return "SwiftFTP 暂时拿不到 verified StoreKit 结果。已购买用户可以重试校验或恢复购买，服务器配置不会丢失。"
+        case .trialActive, .pro:
+            return "核心功能已可用。"
+        }
+    }
+
+    private var iconName: String {
+        appState.entitlementStatus == .entitlementUnknown ? "exclamationmark.shield" : "lock.open.display"
+    }
+
+    private var iconColor: Color {
+        appState.entitlementStatus == .entitlementUnknown ? .orange : .blue
+    }
+
+    @ViewBuilder
+    private func serverSummary(_ server: ServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("当前选中的服务器配置", systemImage: "server.rack")
+                .font(.headline)
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+                GridRow { Text("名称").foregroundColor(.secondary); Text(server.displayName) }
+                GridRow { Text("协议").foregroundColor(.secondary); Text(server.protocol_.rawValue.uppercased()) }
+                GridRow { Text("主机").foregroundColor(.secondary); Text(server.host) }
+                GridRow { Text("端口").foregroundColor(.secondary); Text("\(server.port)") }
+                GridRow { Text("用户").foregroundColor(.secondary); Text(server.username) }
+                if !server.initialPath.isEmpty {
+                    GridRow { Text("默认路径").foregroundColor(.secondary); Text(server.initialPath) }
+                }
+            }
+            .font(.system(size: 13))
+            .textSelection(.enabled)
+        }
+    }
+
+    private var emptySummary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("服务器列表仍可查看", systemImage: "list.bullet.rectangle")
+                .font(.headline)
+            Text(appState.servers.isEmpty
+                 ? "目前没有保存的服务器配置。开始试用或购买 Pro 后可以新建连接。"
+                 : "你可以在侧边栏浏览已保存的服务器，但连接和编辑操作会保持锁定。")
+                .font(.callout)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var disclosureBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("锁定边界", systemImage: "checklist")
+                .font(.headline)
+            Text("允许查看服务器列表与配置、导出不含密码的 JSON、删除本地数据、打开关于/隐私/条款、购买或恢复。连接、上传、下载、实时同步、新建或编辑服务器会被锁定。")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var purchaseActions: some View {
+        HStack(spacing: 10) {
+            if appState.entitlementStatus == .neverStarted {
+                Button("开始 7 天试用") {
+                    Task {
+                        if await appState.startTrial() {
+                            appState.completeOnboarding()
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .disabled(appState.storeManager.isLoading)
                     }
-
-                    Button("恢复购买") {
-                        Task { await appState.storeManager.restorePurchases() }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(appState.storeManager.isLoading)
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(!appState.storeManager.canStartTrial || appState.storeManager.isLoading)
+                .help(appState.storeManager.canStartTrial ? "开始完整试用" : "正在加载试用与价格信息")
+            }
 
-                if appState.storeManager.isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                if let message = appState.storeManager.statusMessage {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 420)
-                }
+            Button(proButtonTitle) {
+                Task { _ = await appState.purchasePro() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(appState.storeManager.isLoading)
 
-                Text("试用结束后，未购买 Pro 将无法继续访问服务器、传输、实时同步和设置中的高级功能。")
+            Button("恢复购买") {
+                Task { _ = await appState.restorePurchases() }
+            }
+            .buttonStyle(.bordered)
+            .disabled(appState.storeManager.isLoading)
+
+            Button("重试校验") {
+                Task { await appState.storeManager.refreshEntitlements() }
+            }
+            .buttonStyle(.bordered)
+            .disabled(appState.storeManager.isRefreshingEntitlements)
+
+            Button("导出配置") {
+                exportServers()
+            }
+            .buttonStyle(.bordered)
+            .disabled(appState.servers.isEmpty)
+        }
+    }
+
+    private var statusBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if appState.storeManager.isLoading || appState.storeManager.isRefreshingEntitlements {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            if let pending = appState.storeManager.pendingPurchaseKind {
+                Label("\(pending.displayName) 正在等待批准。批准完成后，SwiftFTP 会自动刷新权益。", systemImage: "hourglass")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 460)
             }
-            .padding(36)
+            if let message = appState.storeManager.statusMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if appState.entitlementStatus == .neverStarted {
+                Text("永久解锁需一次性购买 \(appState.storeManager.proDisplayPrice ?? "正在加载价格")，无订阅。价格加载前不会开始试用。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
-    private var paywallTitle: String {
-        appState.trialStartedAt == nil ? "7 天完整试用" : "试用已结束"
+    private var proButtonTitle: String {
+        if let price = appState.storeManager.proDisplayPrice {
+            return "购买 SwiftFTP Pro - \(price)"
+        }
+        return "购买 SwiftFTP Pro"
     }
 
-    private var paywallSubtitle: String {
-        if appState.trialStartedAt == nil {
-            return "SwiftFTP 不提供永久免费版。试用期内可使用全部功能；试用结束后需要购买 Pro 继续使用。"
+    private func exportServers() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "SwiftFTP-Servers.json"
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let data = try appState.repository.exportJSON()
+                try data.write(to: url, options: .atomic)
+            } catch {
+                appState.showError(error)
+            }
         }
-        return "你的 7 天试用期已结束。购买 Pro 后可继续使用全部功能。"
     }
 }
 
@@ -202,7 +390,9 @@ struct DetailView: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        if let sid = appState.selectedServerID,
+        if !appState.hasFullAccess {
+            LockedAccessView(appState: appState)
+        } else if let sid = appState.selectedServerID,
            let server = appState.servers.first(where: { $0.id == sid }),
            case .connected(let client) = appState.connectionStates[sid] {
             FileBrowserView(appState: appState, server: server, primaryClient: client)
@@ -317,7 +507,13 @@ struct SidebarView: View {
             Task { connected ? await appState.disconnect(from: s) : await appState.connect(to: s) }
         }
         Divider()
-        Button("编辑") { editTarget = s }
+        Button("编辑") {
+            if appState.hasFullAccess {
+                editTarget = s
+            } else {
+                appState.showCoreFeatureLockedAlert()
+            }
+        }
         Button("复制地址") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(s.connectionSummary, forType: .string)
@@ -471,6 +667,12 @@ struct BottomStatusBar: View {
                     Circle().fill(state.isConnected ? Color.green : Color.secondary).frame(width: 6, height: 6)
                     Text(state.label).font(.caption).foregroundColor(.secondary)
                 }
+            }
+            if appState.isTrialActive {
+                Divider().frame(height: 12)
+                Label("试用剩余约 \(appState.trialDaysRemaining) 天", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 4)
@@ -629,7 +831,13 @@ struct AppMenuCommands: Commands {
             Button("关于 SwiftFTP", action: onShowAbout)
         }
         CommandGroup(after: .newItem) {
-            Button("导入服务器配置…") { importServers() }
+            Button("导入服务器配置…") {
+                if appState.hasFullAccess {
+                    importServers()
+                } else {
+                    appState.showCoreFeatureLockedAlert()
+                }
+            }
             Button("导出服务器配置…") { exportServers() }
                 .disabled(appState.servers.isEmpty)
             Divider()

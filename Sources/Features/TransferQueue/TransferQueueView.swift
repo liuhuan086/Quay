@@ -588,46 +588,54 @@ struct SettingsRootView: View {
 
             Form {
                 if appState.isPro {
-                    Label("已解锁 Pro", systemImage: "checkmark.seal.fill")
+                    Label("已解锁 SwiftFTP Pro", systemImage: "checkmark.seal.fill")
                         .foregroundColor(.green)
-                    Text("无限服务器、实时同步和多并发传输已启用。")
+                    Text("本地 FTP/FTPS/SFTP 核心功能已启用。")
                         .foregroundColor(.secondary)
                 } else if appState.isTrialActive {
                     Label("7 天试用中", systemImage: "clock.fill")
                         .foregroundColor(.blue)
-                    Text("剩余约 \(appState.trialDaysRemaining) 天。试用结束后需要购买 Pro 才能继续使用。")
+                    Text("剩余约 \(appState.trialDaysRemaining) 天。试用结束后，连接、上传、下载和实时同步会锁定；配置仍可查看与导出。")
                         .foregroundColor(.secondary)
-                    Button("购买 Pro - $4.99") {
-                        Task { await appState.storeManager.purchasePro() }
+                    Button(proButtonTitle) {
+                        Task { _ = await appState.purchasePro() }
                     }
                     .disabled(appState.storeManager.isLoading)
                     Button("恢复购买") {
-                        Task { await appState.storeManager.restorePurchases() }
+                        Task { _ = await appState.restorePurchases() }
                     }
                     .disabled(appState.storeManager.isLoading)
                 } else {
-                    Text(appState.trialStartedAt == nil
-                         ? "SwiftFTP 不提供永久免费版。开始 7 天试用可使用全部功能；试用结束后需要购买 Pro。"
-                         : "7 天试用已结束。购买 Pro 后继续使用全部功能。")
+                    Text(purchaseStatusText)
                         .foregroundColor(.secondary)
-                    if appState.trialStartedAt == nil {
+                    if appState.entitlementStatus == .neverStarted {
                         Button("开始 7 天试用") {
-                            appState.startTrial()
+                            Task { _ = await appState.startTrial() }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(!appState.storeManager.canStartTrial || appState.storeManager.isLoading)
                     }
-                    Button("购买 Pro - $4.99") {
-                        Task { await appState.storeManager.purchasePro() }
+                    Button(proButtonTitle) {
+                        Task { _ = await appState.purchasePro() }
                     }
                     .disabled(appState.storeManager.isLoading)
                     Button("恢复购买") {
-                        Task { await appState.storeManager.restorePurchases() }
+                        Task { _ = await appState.restorePurchases() }
                     }
                     .disabled(appState.storeManager.isLoading)
+                    Button("重试校验") {
+                        Task { await appState.storeManager.refreshEntitlements() }
+                    }
+                    .disabled(appState.storeManager.isRefreshingEntitlements)
                 }
-                if appState.storeManager.isLoading {
+                if appState.storeManager.isLoading || appState.storeManager.isRefreshingEntitlements {
                     ProgressView()
                         .controlSize(.small)
+                }
+                if let pending = appState.storeManager.pendingPurchaseKind {
+                    Text("\(pending.displayName) 正在等待批准。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 if let message = appState.storeManager.statusMessage {
                     Text(message)
@@ -641,6 +649,27 @@ struct SettingsRootView: View {
         .padding()
         .onAppear {
             appState.refreshLaunchAtLoginStatus()
+        }
+    }
+
+    private var proButtonTitle: String {
+        if let price = appState.storeManager.proDisplayPrice {
+            return "购买 SwiftFTP Pro - \(price)"
+        }
+        return "购买 SwiftFTP Pro"
+    }
+
+    private var purchaseStatusText: String {
+        switch appState.entitlementStatus {
+        case .neverStarted:
+            let price = appState.storeManager.proDisplayPrice ?? "正在加载价格"
+            return "7 天完整试用可使用全部本地 FTP/FTPS/SFTP 功能；试用结束后需要一次性购买 \(price) 解锁，无订阅。"
+        case .trialExpired:
+            return "7 天试用已结束。服务器配置仍可查看与导出，连接、上传、下载和实时同步需要 SwiftFTP Pro。"
+        case .entitlementUnknown:
+            return "暂时无法校验购买状态。请重试或恢复购买。"
+        case .trialActive, .pro:
+            return ""
         }
     }
 }

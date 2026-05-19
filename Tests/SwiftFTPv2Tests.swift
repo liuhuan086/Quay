@@ -233,6 +233,61 @@ final class TransferProgressTests: XCTestCase {
     }
 }
 
+// MARK: - Entitlements Tests
+final class EntitlementsTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 2_000_000)
+
+    func test_neverStarted_hasNoCoreCapability() {
+        let entitlements = Entitlements()
+        XCTAssertEqual(entitlements.status(now: now), .neverStarted)
+        XCTAssertFalse(entitlements.canUseCoreFTP(now: now))
+    }
+
+    func test_trialActive_grantsCoreCapability() {
+        let entitlements = Entitlements(
+            hasTrialTransaction: true,
+            trialExpiresAt: now.addingTimeInterval(60),
+            hasPro: false,
+            hasCloud: false
+        )
+        XCTAssertEqual(entitlements.status(now: now), .trialActive)
+        XCTAssertTrue(entitlements.canUseCoreFTP(now: now))
+    }
+
+    func test_trialExpired_locksCoreCapability() {
+        let entitlements = Entitlements(
+            hasTrialTransaction: true,
+            trialExpiresAt: now.addingTimeInterval(-60),
+            hasPro: false,
+            hasCloud: false
+        )
+        XCTAssertEqual(entitlements.status(now: now), .trialExpired)
+        XCTAssertFalse(entitlements.canUseCoreFTP(now: now))
+    }
+
+    func test_proWinsOverExpiredTrial() {
+        let entitlements = Entitlements(
+            hasTrialTransaction: true,
+            trialExpiresAt: now.addingTimeInterval(-60),
+            hasPro: true,
+            hasCloud: false
+        )
+        XCTAssertEqual(entitlements.status(now: now), .pro)
+        XCTAssertTrue(entitlements.canUseCoreFTP(now: now))
+    }
+
+    func test_cloudCapabilityDoesNotGrantCoreFTP() {
+        let entitlements = Entitlements(
+            hasTrialTransaction: false,
+            trialExpiresAt: nil,
+            hasPro: false,
+            hasCloud: true
+        )
+        XCTAssertTrue(entitlements.capabilities(now: now).contains(.cloudIntegrations))
+        XCTAssertFalse(entitlements.canUseCoreFTP(now: now))
+    }
+}
+
 // MARK: - Keychain Tests
 final class KeychainTests: XCTestCase {
     let km = KeychainManager.shared

@@ -19,6 +19,9 @@ packages:
     url: https://github.com/orlandos-nl/Citadel.git
     from: "0.7.0"
 
+fileGroups:
+  - SwiftFTP.storekit
+
 targets:
   SwiftFTP:
     type: application
@@ -102,6 +105,7 @@ schemes:
         SwiftFTPTests: [test]
     run:
       config: Debug
+      storeKitConfiguration: SwiftFTP.storekit
     test:
       config: Debug
       targets:
