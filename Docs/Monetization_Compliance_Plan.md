@@ -2,7 +2,7 @@
 
 **文档性质**：可执行整改方案 / AI 与人共用的工作依据
 **适用范围**：Mac App Store（MAS）首发版本的变现模型、IAP 合规、权益与门控
-**结论定调**：MAS 免费下载 + Tier 0 `7-Day Trial` Non-Consumable + 付费 `Full Unlock` Non-Consumable；过期态为「数据可访问、核心功能锁定」，**不是全屏变砖**。
+**结论定调**：MAS 免费下载 + Tier 0 `7-Day Trial` Non-Consumable + 付费 `SwiftFTP Pro` Non-Consumable（解锁首发本地 FTP/FTPS/SFTP 核心功能）；过期态为「数据可访问、核心功能锁定」，**不是全屏变砖**。
 **关联文档**：`Docs/AppStore_Readiness.md`（总体上架阻断项）、`Docs/Release_Verification.md`（提交前验证清单，本方案新增项需并入）。
 
 ---
@@ -16,6 +16,7 @@
 - **禁止**「擅自修复」已登记的既定风险（见 §6 Accepted Risks），尤其是本地时钟回拨延长试用——这是已知并接受的取舍，不要为它加服务器校验或复杂逻辑。
 - **禁止**用重复弹窗/模态骚扰催付。升级提示只在「撞墙那一刻」出现一次，文案克制。这同时是 App Review（4.x dark pattern / 3.1.1）与评分风险。
 - 能力判断一律走**统一的权益解析出口**（见 §3），不得在各 View 里散落 `isPro` / 日期比较。
+- 不要把付费商品对外命名为笼统的 `Full Unlock`，否则未来 `cloud` 二档会被用户合理理解为「已经买过也应包含」。首发付费商品建议显示为 `SwiftFTP Pro` / `SwiftFTP Pro（本地功能）`，文案说明它解锁当前 FTP/FTPS/SFTP 本地客户端能力。
 - 改动 IAP/门控前先读本文件与 `Docs/AppStore_Readiness.md`。
 
 ---
@@ -34,11 +35,11 @@
 |----|------|
 | 分发 | MAS 免费下载 |
 | 试用 | 7 天完整试用，经 Apple Tier 0 Non-Consumable IAP 发放 |
-| 解锁 | 一次性买断 `Full Unlock`，无订阅 |
+| 解锁 | 一次性买断 `SwiftFTP Pro`，无订阅；解锁首发本地 FTP/FTPS/SFTP 客户端核心功能 |
 | 首发定价 | 限时低价（¥18–25 或 $2.99），3 个月后回调 $4.99 / ¥38。目标是早期评论速度与 ASC 排名飞轮，不是首月利润 |
 | 文案纪律 | 商店页与截图明确「7 天完整试用 / 一次买断 / 无订阅」；避免误导性「免费」暗示 |
 | 催付纪律 | 仅在功能撞墙处出现一次升级入口，无弹窗轰炸 |
-| 未来杠杆 | 云存储（S3/OSS/COS）、云同步、团队能力作为**第二付费档**，不并入首发 `Full Unlock`（见 §3 二档预留） |
+| 未来杠杆 | 云存储（S3/OSS/COS）、云同步、团队能力作为**第二付费档**，不并入首发 `SwiftFTP Pro`（见 §3 二档预留） |
 
 ---
 
@@ -52,33 +53,54 @@
 | `trialActive` | trial 交易存在 且 `purchaseDate + 7d > now` 且未撤销 | 完整功能 |
 | `trialExpired` | trial 交易存在 但 `purchaseDate + 7d <= now` | **非变砖锁定态**（见 §4） |
 | `pro` | pro 交易存在 且 `revocationDate == nil` | 完整功能（永久） |
-| `entitlementUnknown` | 启动时 StoreKit 不可达且无本会话已解析结果 | 不得变砖：允许进入、显示「无法校验购买」提示、提供「重试 / 恢复购买」，沿用本会话最后一次内存解析结果（若有）作为临时授权 |
+| `entitlementUnknown` | 权益解析无法得到 verified StoreKit 结果（例如 StoreKit/验证异常、超时、只有 unverified transaction），且无法判断用户是否有权 | 不得变砖：允许进入、显示「无法校验购买」提示、提供「重试 / 恢复购买」。若本会话已有 verified 解析结果，沿用该内存结果；冷启动无结果时进入锁定壳但不得空白付费墙 |
 
 ### 3.2 能力解析（统一出口，预留二档）
 
-- 不要用 flat `enum`（`pro` 与未来 `futureCloud` 会**重畳**，flat enum 二档时必再改结构）。用「解析后的能力集合」：
+- 不要用 flat `enum`（`pro` 与未来 `cloud` 会**重畳**，flat enum 二档时必再改结构）。用「原始权益事实 + 解析后的 capability set」：
 
 ```swift
+enum AppCapability: Hashable, Sendable {
+    case coreFTP          // 连接、上传、下载、同步、队列等首发核心能力
+    case cloudIntegrations // 未来 S3/OSS/COS/云同步二档
+}
+
 struct Entitlements: Sendable {
-    var trialExpiresAt: Date?     // nil = 无有效试用
-    var hasPro: Bool              // 首发 Full Unlock
+    var hasTrialTransaction: Bool // 区分 neverStarted 与 trialExpired
+    var trialExpiresAt: Date?     // nil = 没有 trial 交易；过期 trial 仍保留过期日期
+    var hasPro: Bool              // 首发 SwiftFTP Pro
     var hasCloud: Bool            // 预留二档，首发恒 false
 
-    var fullAccess: Bool {        // 门控唯一入口
-        hasPro || (trialExpiresAt.map { $0 > Date() } ?? false)
+    func capabilities(now: Date) -> Set<AppCapability> {
+        var result = Set<AppCapability>()
+        if hasPro || (trialExpiresAt.map { $0 > now } ?? false) {
+            result.insert(.coreFTP)
+        }
+        if hasCloud {
+            result.insert(.cloudIntegrations)
+        }
+        return result
+    }
+
+    func canUseCoreFTP(now: Date) -> Bool {
+        capabilities(now: now).contains(.coreFTP)
     }
 }
 ```
 
 - 解析来源：遍历 `Transaction.currentEntitlements`。
   - `productID == proProductID` 且 `revocationDate == nil` → `hasPro = true`
-  - `productID == trialProductID` 且 `revocationDate == nil` → `trialExpiresAt = transaction.purchaseDate + 7d`（**注意**：Non-Consumable 的交易在 `currentEntitlements` 中永久存在，到期后**仍在**，所以绝不能「看到 trial entitlement 就放行」，必须算日期）
-- 门控全仓只认 `Entitlements.fullAccess`，替换现有散落的 `isPro` / `hasFullAccess` 直读。
+  - `productID == trialProductID` 且 `revocationDate == nil` → `hasTrialTransaction = true` 且 `trialExpiresAt = transaction.purchaseDate + 7d`（**注意**：Non-Consumable 的交易在 `currentEntitlements` 中永久存在，到期后**仍在**，所以绝不能「看到 trial entitlement 就放行」，必须算日期）
+  - 未来 `cloudProductID` → 只插入 `.cloudIntegrations`，不得反向暗示它包含首发 `coreFTP` 之外的一切。
+- 门控全仓只认统一的 `Entitlements.capabilities(now:)` / `canUseCoreFTP(now:)`，替换现有散落的 `isPro` / `hasFullAccess` 直读。UI 可以读取状态标签（试用中/已购/过期），但功能门控不得各自比较日期。
+- `now` 必须可注入（测试 clock），不要在深层 View 里直接 `Date()`。
 
 ### 3.3 离线 / StoreKit 失败策略（AI 漏点，必须实现）
 
-- 删除 `trialStartedAt` 持久化后，授权改为：每次启动 `refreshEntitlements()`；解析结果存**内存**（本会话），不落盘。
-- StoreKit 不可达：进入 `entitlementUnknown`，**不得锁死**。沿用本会话已解析结果；冷启动且无任何结果时默认锁定但**必须**给「重试 / 恢复购买」动线，不得让可能已付费用户无出路。
+- 删除 `trialStartedAt` 持久化后，授权改为：每次启动优先 `refreshEntitlements()`；解析结果存**内存**（本会话），不落盘自制试用日期。
+- 不要把 `Product.products(for:)` 失败等同于无权益。商品加载失败只影响购买按钮/价格显示；权益解析仍应先走 `Transaction.currentEntitlements` / `Transaction.updates`。
+- StoreKit/验证异常导致无法解析 verified entitlement 时，进入 `entitlementUnknown`，**不得锁死**。沿用本会话已解析结果；冷启动且无任何结果时默认锁定但**必须**给「重试 / 恢复购买」动线，不得让可能已付费用户无出路。
+- 如果 StoreKit 返回本机缓存的 verified non-consumable transaction，即使网络不可达，也按官方交易结果授权；不要额外要求联网。
 
 ---
 
@@ -86,7 +108,7 @@ struct Entitlements: Sendable {
 
 `trialExpired` / `entitlementUnknown(无授权)` 下：
 
-**允许**：查看服务器列表与配置；导出**非敏感**配置（host/port/协议/路径，**绝不导出密码**——密码在 Keychain，导出即绕过 Keychain，违反安全卖点与审核安全维度）；删除本地数据；打开 关于/隐私/条款；购买；恢复购买；设置页。
+**允许**：查看服务器列表与配置；导出**非敏感**配置（host/port/协议/路径等由用户主动导出的连接元数据，**绝不导出密码、passphrase、Keychain 内容、security-scoped bookmark、SSH 私钥内容**）；删除本地数据；打开 关于/隐私/条款；购买；恢复购买；设置页。
 
 **锁定**：建立连接；上传/下载；实时同步；新建任何传输任务；新增/编辑服务器（保持现有 `presentAddServer` / `saveServer` 门控，但文案改为 §5 合规版）。
 
@@ -104,6 +126,8 @@ struct Entitlements: Sendable {
 - 到期失去：「试用结束后，连接、上传、下载、实时同步将被锁定；你的服务器配置与本地数据不会被删除，可继续查看与导出」
 - 后续费用：「永久解锁需一次性购买 [价格]，无订阅」
 - 主按钮「开始 7 天试用」，次按钮「直接购买」「恢复购买」
+- IAP Display Name：trial 商品在所有本地化中必须保留 `7-Day Trial` 语义（例如 `7-Day Trial` 或 `7-Day Trial（7 天试用）`，注意 ASC display name 长度限制）；Pro 商品避免 `Full Unlock`，用 `SwiftFTP Pro` / `SwiftFTP Pro（本地功能）`。
+- IAP Description 与 App Store 截图文案不得暗示永久免费，也不得暗示未来 cloud 二档包含在首发 Pro 中。
 
 过期态文案：移除「永久免费」字样；说明锁定项与解锁方式；不得诱导性措辞。
 
@@ -139,16 +163,16 @@ struct Entitlements: Sendable {
 
 ### Step 3 — ASC 与本地 StoreKit 配置
 - **目标**：可在 ASC 提交、可在本地测试。
-- **改动**：ASC 建两个 IAP：`com.swiftftp.app.trial7`（Tier 0 Non-Consumable，Display Name 形如 `7-Day Trial`，**Family Sharing 关闭**）；`com.swiftftp.app.pro`（付费 Non-Consumable，`Full Unlock`，Family Sharing 可开启）。两个 IAP 必须随首个引用它们的版本一同送审。新增仓库内 `.storekit` 配置文件用于本地无 ASC 测试。
-- **交付物**：ASC 两个 IAP 配置；仓库内 `SwiftFTP.storekit`（含 trial7 与 pro，trial 周期便于压缩测试）。
-- **测试**：Xcode StoreKit 配置可加载、两商品可见、$0 trial 购买不计费。
+- **改动**：ASC 建两个 IAP：`com.swiftftp.app.trial7`（Tier 0 Non-Consumable，Display Name 形如 `7-Day Trial`，**Family Sharing 保持关闭且不要误点开启**）；`com.swiftftp.app.pro`（付费 Non-Consumable，Display Name `SwiftFTP Pro`，Family Sharing 可开启但**一旦开启不可关闭**，需在提交前明确接受）。两个 IAP 必须随首个引用它们的版本一同送审。新增仓库内 `.storekit` 配置文件用于本地无 ASC 测试，并在 Xcode scheme 中选择该 StoreKit Configuration。
+- **交付物**：ASC 两个 IAP 配置；每个 IAP 的 App Review Screenshot 与 Review Notes；仓库内 `SwiftFTP.storekit`（含 trial7 与 pro，trial 周期便于压缩测试）。
+- **测试**：Xcode StoreKit 配置可加载、两商品可见、本地 trial 购买不计费、scheme 确认使用该 `.storekit` 文件。
 - **下一步**：Step 4。
 
 ### Step 4 — 重写 StoreManager（双商品 + 日期判定 + 删除 UserDefaults）
 - **目标**：授权来源切到 StoreKit 交易，删除自制计时。
-- **改动**：`Sources/Core/Billing/StoreManager.swift`（新增 `trialProductID`；`refreshEntitlements()` 同时识别 trial/pro，trial 用 `purchaseDate + 7d` 算 `trialExpiresAt`，pro 看 `revocationDate`；产出 §3.2 `Entitlements`）；`Sources/App/AppState.swift`（删除 `trialStartedAt` 及其 `didSet`/`trialStartedAtKey`/`wireTrialTimer` 中对持久化的依赖；`hasFullAccess` 改为读统一 `Entitlements.fullAccess`；实现 §3.3 离线策略——内存缓存、不落盘、`entitlementUnknown` 不变砖）。
-- **交付物**：双商品 StoreManager；统一能力出口；离线/失败兜底逻辑。
-- **测试**（含 §8 矩阵）：单测覆盖能力解析（trial 未过期/已过期/已撤销/pro/二者皆无/StoreKit 失败兜底）；确认全仓无 `trialStartedAt` 持久读写。
+- **改动**：`Sources/Core/Billing/StoreManager.swift`（新增 `trialProductID`；`refreshEntitlements()` 同时识别 trial/pro，trial 用 `purchaseDate + 7d` 算 `trialExpiresAt`，pro 看 `revocationDate`；产出 §3.2 `Entitlements`；`Transaction.updates` 同时处理 trial/pro/未来 cloud；购买成功后 `finish()`）；`Sources/App/AppState.swift`（删除 `trialStartedAt` 及其 `didSet`/`trialStartedAtKey`/`wireTrialTimer` 中对持久化的依赖；`hasFullAccess` 改为读统一 capability；实现 §3.3 离线策略——内存缓存、不落盘自制日期、`entitlementUnknown` 不变砖）。
+- **交付物**：双商品 StoreManager；统一 capability 出口；离线/失败兜底逻辑；可测试 clock。
+- **测试**（含 §8 矩阵）：单测覆盖能力解析（trial 未过期/已过期/已撤销/pro/二者皆无/StoreKit 失败兜底）；覆盖 `Transaction.updates` 后状态刷新；确认全仓无 `trialStartedAt` 持久读写。
 - **下一步**：Step 5。
 
 ### Step 5 — 重做首启 Onboarding
@@ -178,15 +202,18 @@ struct Entitlements: Sendable {
 | 5 | 试用期内删除并重装 | 试用按**原 purchaseDate** 续算，**不重置** |
 | 6 | 第 30 天恢复购买（仅试用过） | 显示**已过期**，不发放新的 7 天 |
 | 7 | 审核账号已消耗过 trial | 落锁定态，但 App 完整、文案可理解、可购买/恢复 |
-| 8 | 购买 Full Unlock（从过期态） | 永久解锁 |
+| 8 | 从过期态购买 `SwiftFTP Pro` | 永久解锁首发本地核心功能 |
 | 9 | Pro 退款/撤销（`revocationDate`） | 访问权按规则收回 |
 | 10 | 离线/StoreKit 不可达启动（曾解析为有权） | 不变砖，沿用本会话结果，提供重试/恢复 |
 | 11 | 冷启动 + 离线 + 无任何缓存 | 锁定但提供「重试/恢复购买」出路 |
 | 12 | 任意导出配置 | 文件不含任何密码/passphrase |
 | 13 | 既购用户二台设备启动 | 自动识别 pro，不显示试用 CTA |
+| 14 | `Product.products(for:)` 失败但 `currentEntitlements` 有 pro | 仍解锁核心功能，只禁用/降级购买按钮显示 |
+| 15 | `Transaction.updates` 收到 pro/trial 交易 | 状态即时刷新并 finish transaction |
+| 16 | ASC/IAP 元数据检查 | trial 名称含 `7-Day Trial`；Pro 不叫 `Full Unlock`；两个 IAP 均有审核截图与备注 |
 
 ---
 
 ## 9. 审核提交备注（Review Notes 模板）
 
-> SwiftFTP 采用 App Review Guideline 3.1.1 指定的 Tier 0 Non-Consumable 试用路径。`com.swiftftp.app.trial7` 为 Price Tier 0 免费试用券（7 天），`com.swiftftp.app.pro` 为一次性永久解锁。试用前界面已明确披露试用时长、到期锁定的功能、后续一次性费用。试用到期后 App 不变砖：用户仍可查看与导出（非敏感）服务器配置、删除数据、购买与恢复。若审核账号此前已领取过该 Tier 0 试用券，将直接进入锁定态——这是 Non-Consumable「每 Apple ID 一次」的预期行为，可用提供的未消耗 Sandbox 账号体验首次试用态。
+> SwiftFTP 采用 App Review Guideline 3.1.1 指定的 Tier 0 Non-Consumable 试用路径。`com.swiftftp.app.trial7` 为 Price Tier 0 免费试用券（7 天，Display Name: `7-Day Trial`），`com.swiftftp.app.pro` 为一次性 `SwiftFTP Pro` 解锁，覆盖首发本地 FTP/FTPS/SFTP 客户端核心功能。试用前界面已明确披露试用时长、到期锁定的功能、后续一次性费用。试用到期后 App 不变砖：用户仍可查看与导出（非敏感）服务器配置、删除数据、购买与恢复。若审核账号此前已领取过该 Tier 0 试用券，将直接进入锁定态——这是 Non-Consumable「每 Apple ID 一次」的预期行为；锁定态本身可完整审核购买/恢复路径。如需体验首次试用态，可使用未消耗过 trial 的干净 Sandbox 账号。
