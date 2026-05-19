@@ -48,6 +48,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
     public var notes: String
     public var useSSHKey: Bool
     public var sshKeyPath: String?
+    public var sshKeyBookmark: Data?
     public var allowSelfSignedTLS: Bool
     // Runtime-only credential loaded from Keychain. Decoding accepts legacy JSON
     // passwords for migration, but encoding never persists this field.
@@ -66,6 +67,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         initialPath: String = "/", encodingName: String = "utf-8",
         groupName: String? = nil, colorLabel: ServerColorLabel? = nil,
         notes: String = "", useSSHKey: Bool = false, sshKeyPath: String? = nil,
+        sshKeyBookmark: Data? = nil,
         allowSelfSignedTLS: Bool = false,
         password: String = "",
         createdAt: Date = Date(), lastConnectedAt: Date? = nil
@@ -83,6 +85,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         self.notes           = notes
         self.useSSHKey       = useSSHKey
         self.sshKeyPath      = sshKeyPath
+        self.sshKeyBookmark  = sshKeyBookmark
         self.allowSelfSignedTLS = allowSelfSignedTLS
         self.password        = password
         self.createdAt       = createdAt
@@ -106,6 +109,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         case notes
         case useSSHKey
         case sshKeyPath
+        case sshKeyBookmark
         case allowSelfSignedTLS
         case password
         case createdAt
@@ -128,6 +132,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         self.useSSHKey = try c.decodeIfPresent(Bool.self, forKey: .useSSHKey) ?? false
         self.sshKeyPath = try c.decodeIfPresent(String.self, forKey: .sshKeyPath)
+        self.sshKeyBookmark = try c.decodeIfPresent(Data.self, forKey: .sshKeyBookmark)
         self.allowSelfSignedTLS = try c.decodeIfPresent(Bool.self, forKey: .allowSelfSignedTLS) ?? false
         self.password = try c.decodeIfPresent(String.self, forKey: .password) ?? ""
         self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
@@ -149,6 +154,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         try c.encode(notes, forKey: .notes)
         try c.encode(useSSHKey, forKey: .useSSHKey)
         try c.encodeIfPresent(sshKeyPath, forKey: .sshKeyPath)
+        try c.encodeIfPresent(sshKeyBookmark, forKey: .sshKeyBookmark)
         try c.encode(allowSelfSignedTLS, forKey: .allowSelfSignedTLS)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(lastConnectedAt, forKey: .lastConnectedAt)

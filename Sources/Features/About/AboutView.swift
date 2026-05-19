@@ -45,9 +45,9 @@ struct AboutView: View {
                 .frame(maxWidth: 420)
 
             HStack(spacing: 18) {
-                Link("官网", destination: URL(string: "https://example.com/swiftftp")!)
-                Link("隐私政策", destination: URL(string: "https://example.com/swiftftp/privacy")!)
-                Link("用户协议", destination: URL(string: "https://example.com/swiftftp/terms")!)
+                Link("官网", destination: AppLinks.homepage)
+                Link("隐私政策", destination: AppLinks.privacyPolicy)
+                Link("用户协议", destination: AppLinks.termsOfUse)
             }
             .font(.callout)
 
