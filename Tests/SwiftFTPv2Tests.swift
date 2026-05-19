@@ -1,6 +1,7 @@
 // SwiftFTPv2Tests.swift — Comprehensive unit tests
 // Run: Xcode → Product → Test  (⌘U)
 import XCTest
+import Security
 @testable import SwiftFTP
 
 // MARK: - Entities Tests
@@ -29,6 +30,21 @@ final class ServerConfigTests: XCTestCase {
         let json = String(data: data, encoding: .utf8) ?? ""
         XCTAssertFalse(json.contains("secret123"))
         XCTAssertFalse(json.contains("\"password\""))
+    }
+
+    func test_sshKeyBookmark_persistsForSandboxAccess() throws {
+        let bookmark = Data("bookmark-data".utf8)
+        let a = ServerConfig(
+            displayName: "A",
+            host: "a.com",
+            username: "u",
+            useSSHKey: true,
+            sshKeyPath: "/Users/test/.ssh/id_ed25519",
+            sshKeyBookmark: bookmark
+        )
+        let data = try JSONEncoder().encode(a)
+        let decoded = try JSONDecoder().decode(ServerConfig.self, from: data)
+        XCTAssertEqual(decoded.sshKeyBookmark, bookmark)
     }
 
     func test_protocol_isSecure() {
@@ -335,6 +351,46 @@ final class ServerRepositoryTests: XCTestCase {
         await repo.delete(c.id)
         try await repo.importJSON(data)
         XCTAssertTrue(repo.fetchAll().contains(where: { $0.id == c.id }))
+    }
+
+    func test_exportJSONOmitsSecurityScopedSSHKeyBookmark() async throws {
+        let c = ServerConfig(
+            displayName: "Key Server",
+            host: "key.local",
+            username: "u",
+            useSSHKey: true,
+            sshKeyPath: "/Users/test/.ssh/id_ed25519",
+            sshKeyBookmark: Data("local-bookmark".utf8)
+        )
+        try await repo.save(c)
+
+        let stored = repo.fetchAll().first(where: { $0.id == c.id })
+        XCTAssertEqual(stored?.sshKeyBookmark, Data("local-bookmark".utf8))
+
+        let exported = try repo.exportJSON()
+        let json = String(data: exported, encoding: .utf8) ?? ""
+        XCTAssertFalse(json.contains("sshKeyBookmark"))
+        XCTAssertFalse(json.contains("local-bookmark"))
+    }
+
+    func test_importJSONOmitsSecurityScopedSSHKeyBookmark() async throws {
+        let c = ServerConfig(
+            displayName: "Imported Key Server",
+            host: "imported-key.local",
+            username: "u",
+            useSSHKey: true,
+            sshKeyPath: "/Users/test/.ssh/id_ed25519",
+            sshKeyBookmark: Data("foreign-bookmark".utf8)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode([c])
+
+        try await repo.importJSON(data)
+
+        let imported = repo.fetchAll().first(where: { $0.id == c.id })
+        XCTAssertEqual(imported?.sshKeyPath, "/Users/test/.ssh/id_ed25519")
+        XCTAssertNil(imported?.sshKeyBookmark)
     }
 
     func test_legacyPasswordMigratesToKeychainAndIsRemovedFromDefaults() async throws {
@@ -745,6 +801,33 @@ final class FTPErrorTests: XCTestCase {
     func test_hostReachabilityFailure_detects_posixHostUnreachable() {
         let error = POSIXError(POSIXErrorCode(rawValue: EHOSTUNREACH)!)
         XCTAssertTrue(FTPError.isHostReachabilityFailure(error))
+    }
+
+    func test_ftpsCertificateOverrideAllowsOnlyNarrowTrustFailures() {
+        XCTAssertTrue(FTPClient.shouldAllowFTPSCertificateOverride(
+            errorCodes: [Int(errSecCertificateExpired)],
+            description: "certificate expired"
+        ))
+        XCTAssertTrue(FTPClient.shouldAllowFTPSCertificateOverride(
+            errorCodes: [Int(errSecNotTrusted)],
+            description: "self signed certificate"
+        ))
+        XCTAssertFalse(FTPClient.shouldAllowFTPSCertificateOverride(
+            errorCodes: [Int(errSecHostNameMismatch)],
+            description: "host name mismatch"
+        ))
+        XCTAssertFalse(FTPClient.shouldAllowFTPSCertificateOverride(
+            errorCodes: [Int(errSecCertificateRevoked)],
+            description: "certificate revoked"
+        ))
+        XCTAssertFalse(FTPClient.shouldAllowFTPSCertificateOverride(
+            errorCodes: [Int(errSecNotTrusted), Int(errSecCertificateRevoked)],
+            description: "certificate revoked and not trusted"
+        ))
+        XCTAssertFalse(FTPClient.shouldAllowFTPSCertificateOverride(
+            errorCodes: [Int(errSecNotTrusted)],
+            description: "certificate revocation check failed"
+        ))
     }
 }
 

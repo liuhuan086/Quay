@@ -54,7 +54,12 @@ final class ServerRepository: @unchecked Sendable {
     }
 
     func exportJSON() throws -> Data {
-        try Self.makeEncoder().encode(fetchAll())
+        let exportable = fetchAll().map { config in
+            var copy = config
+            copy.sshKeyBookmark = nil
+            return copy
+        }
+        return try Self.makeEncoder().encode(exportable)
     }
 
     func importJSON(_ data: Data) async throws {
@@ -287,6 +292,7 @@ final class ServerRepository: @unchecked Sendable {
                 try persistCredential(for: config, policy: .replace, shouldDeleteEmptyCredential: false)
                 var stored = config
                 stored.password = ""
+                stored.sshKeyBookmark = nil
                 all.append(stored)
                 strippedIDs.insert(config.id)
             }

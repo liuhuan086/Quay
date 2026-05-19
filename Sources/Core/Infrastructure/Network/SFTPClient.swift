@@ -351,10 +351,16 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
 
         let keyURL = try privateKeyURL()
         let keyData: Data
+        let didStartAccessing = keyURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                keyURL.stopAccessingSecurityScopedResource()
+            }
+        }
         do {
             keyData = try Data(contentsOf: keyURL)
         } catch {
-            throw FTPError.sshKeyLoadFailed("无法读取私钥文件：\(keyURL.path)")
+            throw FTPError.sshKeyLoadFailed("无法读取私钥文件：\(keyURL.path)。请在连接设置中通过“选择…”重新授权该私钥。")
         }
 
         let passphrase = password.isEmpty ? nil : Data(password.utf8)
@@ -373,6 +379,33 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
     }
 
     private func privateKeyURL() throws -> URL {
+        if let bookmark = config.sshKeyBookmark {
+            do {
+                var isStale = false
+                let url = try URL(
+                    resolvingBookmarkData: bookmark,
+                    options: [.withSecurityScope],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+                guard !isStale else {
+                    throw FTPError.sshKeyLoadFailed("私钥文件授权已失效，请在连接设置中重新选择 SSH 私钥")
+                }
+                if let path = config.sshKeyPath,
+                   !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let selectedPath = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path
+                    guard url.standardizedFileURL.path == selectedPath else {
+                        throw FTPError.sshKeyLoadFailed("私钥路径与保存的沙盒授权不一致，请重新选择 SSH 私钥")
+                    }
+                }
+                return url
+            } catch let error as FTPError {
+                throw error
+            } catch {
+                throw FTPError.sshKeyLoadFailed("私钥文件授权不可用，请在连接设置中重新选择 SSH 私钥")
+            }
+        }
+
         let candidates: [String]
         if let path = config.sshKeyPath, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             candidates = [path]

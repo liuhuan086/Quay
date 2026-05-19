@@ -4,6 +4,7 @@
 // instead of `actor`, which avoids the "conformance crosses actor-isolated code" error.
 import Foundation
 import Network
+import Security
 
 // MARK: - Internal state box (isolated by queue)
 private final class FTPState: @unchecked Sendable {
@@ -40,9 +41,12 @@ public final class FTPClient: AnyFTPClient {
         if config.protocol_ == .ftps {
             let tls = NWProtocolTLS.Options()
             if config.allowSelfSignedTLS {
+                let host = config.host
                 sec_protocol_options_set_verify_block(
                     tls.securityProtocolOptions,
-                    { _, _, complete in complete(true) },
+                    { _, trust, complete in
+                        complete(Self.shouldAllowFTPSCertificateOverride(trust: trust, host: host))
+                    },
                     queue
                 )
             }
@@ -474,6 +478,61 @@ public final class FTPClient: AnyFTPClient {
 
     private func joinedRemotePath(base: String, name: String) -> String {
         base.hasSuffix("/") ? base + name : base + "/" + name
+    }
+
+    // MARK: - FTPS trust exceptions
+    static func shouldAllowFTPSCertificateOverride(errorCodes: Set<Int>, description: String) -> Bool {
+        let lowercased = description.lowercased()
+        let deniedCodes: Set<Int> = [
+            Int(errSecHostNameMismatch),
+            Int(errSSLHostNameMismatch),
+            Int(errSecCertificateRevoked)
+        ]
+        let allowedCodes: Set<Int> = [
+            Int(errSecCertificateExpired),
+            Int(errSecCertificateNotValidYet),
+            Int(errSecNotTrusted),
+            Int(errSecInvalidCertAuthority)
+        ]
+
+        if !errorCodes.isDisjoint(with: deniedCodes) {
+            return false
+        }
+        if lowercased.contains("host name")
+            || lowercased.contains("hostname")
+            || lowercased.contains("name mismatch")
+            || lowercased.contains("revoked")
+            || lowercased.contains("revocation") {
+            return false
+        }
+        return !errorCodes.isDisjoint(with: allowedCodes)
+    }
+
+    private static func shouldAllowFTPSCertificateOverride(trust: sec_trust_t, host: String) -> Bool {
+        let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
+        SecTrustSetPolicies(secTrust, SecPolicyCreateSSL(true, host as CFString))
+
+        var error: CFError?
+        if SecTrustEvaluateWithError(secTrust, &error) {
+            return true
+        }
+        guard let error else { return false }
+        return shouldAllowFTPSCertificateOverride(
+            errorCodes: trustErrorCodes(from: error),
+            description: CFErrorCopyDescription(error) as String
+        )
+    }
+
+    private static func trustErrorCodes(from error: CFError) -> Set<Int> {
+        var codes = Set([Int(CFErrorGetCode(error))])
+        let nsError = error as Error as NSError
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            codes.insert(underlying.code)
+        }
+        if let underlying = nsError.userInfo[kCFErrorUnderlyingErrorKey as String] as? NSError {
+            codes.insert(underlying.code)
+        }
+        return codes
     }
 }
 

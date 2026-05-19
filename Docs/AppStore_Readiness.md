@@ -2,14 +2,16 @@
 
 **审阅人视角**：iOS/macOS 应用架构师 + App Review 经验 + 独立开发者商业化角度
 **版本**：v2.0.0（构建产物：`build/SwiftFTP_v2.0.0.dmg`）
-**评估日期**：2026-05-09（已同步当前代码状态）
-**仓库规模**：约 5k 行 Swift（含 47 个单测） / 单人开发
+**评估日期**：2026-05-19（已同步当前代码状态）
+**仓库规模**：约 5k 行 Swift（含 66 个单测） / 单人开发
+
+> 📌 变现 / IAP / 试用 / 门控相关改动，**必须先读** `Docs/Monetization_Compliance_Plan.md`（含给 AI 的硬约束、权益模型、过期态边界、分步执行与测试矩阵）。
 
 ---
 
 ## 0. 一句话结论
 
-**可以做成「小而美」的付费 FTP/SFTP 客户端，当前代码已经补上了一批早期阻断项：App Sandbox、Keychain 密码存储、SFTP TOFU、StoreKit 2 基础付费、首次引导、About/致谢、SFTP 流式上传与续传。** 距离 MAS 审核通过仍建议预留 **1–2 周** 集中收尾，主要卡点变成**发布签名/ASC 物料、真实协议集成测试、沙盒文件访问边界、FTPS 证书例外策略细化**。
+**可以做成「小而美」的付费 FTP/SFTP 客户端，当前代码已经补上了一批早期阻断项：App Sandbox、Keychain 密码存储、SFTP TOFU、StoreKit 2 基础付费、首次引导、About/致谢、SFTP 流式上传与续传、FTPS 证书例外收窄、SFTP 私钥 bookmark。** 距离 MAS 审核通过仍建议预留 **1–2 周** 集中收尾，主要卡点变成**ASC 物料、StoreKit Sandbox、真实协议集成测试、沙盒文件访问手测、最终 App Store 分发签名**。
 
 如果只走 **Developer ID + DMG 直售**（绕开 MAS），当前功能已经接近可打包试卖，仍需要公证、Sparkle/更新策略、隐私政策和真实服务器冒烟验证。
 
@@ -83,13 +85,13 @@
 | T3 | 单窗口架构：`WindowGroup { RootView }` 没有多服务器多窗口路由 | `MainViews.swift` | 🟡 影响产品力，不影响审核 |
 | T4 | 真实 FTP/SFTP 端到端测试缺失 | `Tests/` | 🟡 当前单测覆盖值类型/仓储/Keychain，缺少协议级回归网 |
 | T5 | 本地文件打开/拖入上传在沙盒下仍有 TODO：需逐个验证 `startAccessingSecurityScopedResource()` 覆盖面 | `FileBrowserView.swift`、`FileViewModels.swift` | 🟡 MAS 审核前必须手测 |
-| T6 | FTPS 的「允许不受信证书」开关目前是用户显式放行后全部信任，缺少按错误类型细分 | `FTPClient.swift` | 🟡 默认安全，例外模式仍应更窄 |
+| T6 | FTPS 的「允许不受信证书」已收窄到自签/过期/未生效/未知 CA；hostname mismatch 与 revoked 不放行 | `FTPClient.swift` | 🟢 仍需真实 FTPS 服务器 smoke test |
 
 ### 2.3 测试覆盖
 
-- 现有 47 个单测，覆盖 `Entities` / `TransferTask` / `Keychain` / `Repository` / `ExclusionMatcher` / `FTPError` / `KnownHostsManager` / `ContinuationBox` / `ConnectionPool` / security-scoped bookmark 基础回归。
+- 现有 66 个单测，覆盖 `Entities` / `TransferTask` / `Keychain` / `Repository` / `ExclusionMatcher` / `FTPError` / `KnownHostsManager` / `ContinuationBox` / `ConnectionPool` / security-scoped bookmark / FTPS 证书例外 / SFTP 私钥 bookmark 导入导出回归。
 - **缺失**：FTPClient 协议解析（MLSD/LIST/PASV/多行响应）单测、TransferEngine 状态机测试、UI 测试、真实 FTP/SFTP 端到端测试（推荐用 Docker pure-ftpd + openssh-server 起本地服务器跑集成测）。
-- 验证命令：`xcodebuild test -project SwiftFTP.xcodeproj -scheme SwiftFTP -destination 'platform=macOS' -derivedDataPath /private/tmp/SwiftFTPDerivedData -clonedSourcePackagesDirPath /private/tmp/SwiftFTPSourcePackages CODE_SIGNING_ALLOWED=NO`，当前 47 tests 通过。
+- 验证命令：`xcodebuild test -project SwiftFTP.xcodeproj -scheme SwiftFTP -destination 'platform=macOS' -derivedDataPath /private/tmp/SwiftFTPDerivedDataSigned -clonedSourcePackagesDirPath /private/tmp/SwiftFTPSourcePackages`，当前 66 tests 通过。Keychain 相关测试需要开发签名与 entitlements；`CODE_SIGNING_ALLOWED=NO` 会触发 `errSecMissingEntitlement (-34018)`，不再作为完整测试口径。
 
 ---
 
@@ -126,7 +128,7 @@
 
 **当前**：`Sources/Resources/SwiftFTP.entitlements` 已启用 App Sandbox，并包含 network client、user-selected read/write、app-scope bookmarks。
 
-MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；当前开发构建使用 `CODE_SIGNING_ALLOWED=NO` 可通过 Debug build/test，但不等同于可提交包。
+MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；当前开发签名下 Debug build/test 可通过，但不等同于可提交包。不要用 `CODE_SIGNING_ALLOWED=NO` 验证 Keychain 流程。
 
 切到沙盒后会破坏的现有功能：
 - ✅ FSEventWatcher 监控用户外的目录 → 已通过 `NSOpenPanel` 保存 security-scoped bookmark；
@@ -153,8 +155,8 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 | # | 问题 | 状态 |
 |---|------|------|
 | A1 | App Sandbox | ✅ 已启用；仍需 Release 签名包手测文件访问 |
-| A2 | 签名/描述文件 | 🔴 `DEVELOPMENT_TEAM` 仍为空，Archive 前必须配置 Apple Distribution + MAS 描述文件 |
-| A3 | 没有 Apple Developer Account（需付费 $99/年） | 🔴 商业前提 |
+| A2 | 签名/描述文件 | 🟡 `DEVELOPMENT_TEAM` 已配置，`xcodebuild archive` 通过；最终上传仍需 Xcode Organizer 用 Apple Distribution + MAS 描述文件导出/上传 |
+| A3 | Apple Developer Account | ✅ 已有 |
 | A4 | Bundle ID `com.swiftftp.app` 未在 App Store Connect 注册 | 🔴 |
 | A5 | AppIcon Set 已存在（16–1024），但提交前仍需在 Release `.app`、Finder、Dock、App Store Connect 截图中复核显示效果 | 🟢/复核 |
 | A6 | 没有 App Store Connect 物料：截图、副标题、关键字、宣传文本、隐私问卷 | 🔴 |
@@ -229,7 +231,7 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 - [x] **S2: SFTP TOFU host-key 验证**（基础校验已接入）
 - [x] **S3: FTPS 默认严格 TLS + 高级开关**（例外模式仍建议收窄）
 - [x] **A1: 启用 App Sandbox + 最小 entitlements**
-- [ ] **A2: 配置 Apple Distribution / MAS provisioning / DEVELOPMENT_TEAM**
+- [ ] **A2: 用 Xcode Organizer 做 Apple Distribution / MAS provisioning 导出或上传**（`DEVELOPMENT_TEAM` 已配置，CLI archive 已通过）
 - [x] **沙盒下的 FSEvents**：security-scoped bookmark 持久化
 - [x] **T1: SFTP 大文件分块上传**
 - [x] **T2/T3: 修菜单空动作 / 移除死开关 / maxConcurrent 启动加载**
@@ -306,7 +308,7 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 
 ## 8. 我会怎么做（独立开发者建议）
 
-1. **本周**：做 Release 签名/沙盒包手测，补 StoreKit Sandbox 流程，收窄 FTPS 自签例外，拉起本地 FTP/SFTP 集成测试。
+1. **本周**：做 Xcode Organizer 分发签名、沙盒包手测、StoreKit Sandbox 流程、真实 FTP/FTPS/SFTP 集成测试。
 2. **下周**：图标显示复核 + 截图 + ASC 物料 + 隐私政策 URL；同时**先发一个 Developer ID 直营版**（Gumroad / 爱发电 / 微店），定价 ¥38（限时 50% 早鸟），收集 30–50 个真实用户反馈。
 3. **第 3–4 周**：根据直营版反馈打磨 1–2 个高频痛点（多窗口或英文化），提交 MAS。
 4. **MAS 上架后**：保持每月 1 个小版本（修 bug + 加 1 个小功能），半年后视情况上调到 ¥68。

@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.swiftftp
   deploymentTarget:
     macOS: "14.0"
-  xcodeVersion: "16.0"
+  xcodeVersion: "26.5"
   createIntermediateGroups: true
   defaultConfig: Debug
 
@@ -39,9 +39,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Sources/Resources/SwiftFTP.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: false
-        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Automatic
         CODE_SIGNING_REQUIRED: "YES"
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: "UW4Z5U4U66"
         COMBINE_HIDPI_IMAGES: "YES"
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
@@ -49,6 +49,7 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
       configs:
         Debug:
+          CODE_SIGN_IDENTITY: "Apple Development"
           SWIFT_OPTIMIZATION_LEVEL: "-Onone"
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG"
         Release:
@@ -56,8 +57,28 @@ targets:
           SWIFT_COMPILATION_MODE: wholemodule
     info:
       path: Sources/Resources/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIconName: AppIcon
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: SwiftFTP
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHumanReadableCopyright: Copyright 2024-2026. All rights reserved.
+        LSApplicationCategoryType: public.app-category.utilities
     entitlements:
       path: Sources/Resources/SwiftFTP.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.files.bookmarks.app-scope: true
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.swiftftp.app
 
   SwiftFTPTests:
     type: bundle.unit-test

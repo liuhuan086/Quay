@@ -17,6 +17,7 @@ struct ServerEditView: View {
     @State private var notes: String
     @State private var useSSHKey: Bool
     @State private var sshKeyPath: String
+    @State private var sshKeyBookmark: Data?
     @State private var allowSelfSignedTLS: Bool
 
     @State private var activeTab = 0
@@ -46,6 +47,7 @@ struct ServerEditView: View {
         _notes       = State(initialValue: config?.notes ?? "")
         _useSSHKey   = State(initialValue: config?.useSSHKey ?? false)
         _sshKeyPath  = State(initialValue: config?.sshKeyPath ?? "")
+        _sshKeyBookmark = State(initialValue: config?.sshKeyBookmark)
         _allowSelfSignedTLS = State(initialValue: config?.allowSelfSignedTLS ?? false)
     }
 
@@ -307,6 +309,7 @@ struct ServerEditView: View {
             colorLabel: colorLabel, notes: notes,
             useSSHKey: useSSHKey,
             sshKeyPath: sshKeyPath.isEmpty ? nil : sshKeyPath,
+            sshKeyBookmark: validSSHKeyBookmark(),
             allowSelfSignedTLS: allowSelfSignedTLS,
             password: password,
             createdAt: existingConfig?.createdAt ?? Date(),
@@ -331,6 +334,7 @@ struct ServerEditView: View {
             notes: notes,
             useSSHKey: useSSHKey,
             sshKeyPath: sshKeyPath.isEmpty ? nil : sshKeyPath,
+            sshKeyBookmark: validSSHKeyBookmark(),
             allowSelfSignedTLS: allowSelfSignedTLS,
             password: password
         )
@@ -356,7 +360,37 @@ struct ServerEditView: View {
         p.message = "选择 SSH 私钥文件"
         p.begin { response in
             guard response == .OK else { return }
-            sshKeyPath = p.url?.path ?? ""
+            guard let url = p.url else { return }
+            sshKeyPath = url.path
+            do {
+                sshKeyBookmark = try url.bookmarkData(
+                    options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+            } catch {
+                sshKeyBookmark = nil
+                testState = .fail("私钥已选择，但保存沙盒访问授权失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func validSSHKeyBookmark() -> Data? {
+        guard useSSHKey, let sshKeyBookmark else { return nil }
+        guard !sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        do {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: sshKeyBookmark,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            guard !isStale else { return nil }
+            let selectedPath = URL(fileURLWithPath: sshKeyPath).standardizedFileURL.path
+            return url.standardizedFileURL.path == selectedPath ? sshKeyBookmark : nil
+        } catch {
+            return nil
         }
     }
 }
