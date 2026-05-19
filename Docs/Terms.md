@@ -18,6 +18,6 @@ Quay is provided as-is, without warranties of any kind. Always keep independent 
 
 ## Contact
 
-For support or terms-related questions, open an issue at:
+For support or terms-related questions, open a support issue at:
 
-https://github.com/liuhuan086/swiftFTP/issues
+https://github.com/liuhuan086/app-pages/issues

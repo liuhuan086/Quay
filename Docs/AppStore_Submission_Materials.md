@@ -42,6 +42,15 @@ Capture five Mac screenshots from a signed build using production-like sample da
 
 Current implementation can be submitted as no data collected, provided no analytics SDK is added before release.
 
+Public URLs for App Store Connect:
+
+| Field | URL |
+| --- | --- |
+| Marketing URL | `https://liuhuan086.github.io/app-pages/quay/` |
+| Support URL | `https://liuhuan086.github.io/app-pages/quay/support.html` |
+| Privacy Policy URL | `https://liuhuan086.github.io/app-pages/quay/privacy.html` |
+| Terms URL | `https://liuhuan086.github.io/app-pages/quay/terms.html` |
+
 | App Store Connect question | Answer |
 | --- | --- |
 | Data used to track the user | None |

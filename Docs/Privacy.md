@@ -18,6 +18,6 @@ Quay does not collect, sell, rent, or share personal data. If you install the ap
 
 ## Contact
 
-For privacy questions, open an issue at:
+For privacy questions, open a support issue at:
 
-https://github.com/liuhuan086/swiftFTP/issues
+https://github.com/liuhuan086/app-pages/issues

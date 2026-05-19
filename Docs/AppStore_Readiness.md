@@ -121,7 +121,7 @@
 |---|------|------|
 | S4 | 本地文件浏览/拖放上传仍需完整沙盒手测，确保所有打开/读取路径都来自用户选择或 security-scoped URL | 补 `startAccessingSecurityScopedResource()` 覆盖面和手测清单 |
 | S5 | 私钥 passphrase 直接复用 `password` 字段，UI 上没区分密码与 passphrase，混用容易误存 | `ServerEditView` 已有"密钥密码"独立 placeholder，但底层仍是同一个 `password` 字段 |
-| S6 | About/致谢已有基础实现，但公开隐私政策 URL 仍缺 | MAS 提交前补公开 HTTPS 隐私政策 |
+| S6 | About/致谢已有基础实现；公开隐私政策 URL 已切到 GitHub Pages | MAS 提交前复核页面可访问 |
 | S7 | `NotificationService.send` 在 `notDetermined` 时即时申请权限——首次运行就弹，且未做 `usageDescription` 文案 | 改为延迟到首个传输完成时再请求 |
 
 ### 3.3 沙盒 (App Sandbox)
@@ -180,7 +180,7 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 |----|------|------|
 | Citadel (BSD-2-Clause) | `project.yml:18` 引入 | 加进 About → "致谢" 列表 |
 | swift-nio 等子依赖 | Citadel 间接引入 | 同上 |
-| 隐私政策 URL | 缺 | 必须有公开 URL（GitHub Pages 即可） |
+| 隐私政策 URL | 已有 GitHub Pages 公开 URL | 提交前复核可访问 |
 | 用户协议/EULA | 缺 | MAS 用 Apple 标准 EULA 即可，直营版需自写 |
 | 公司主体 / 个人开发者抬头 | 未确认 | 决定 Apple Developer 账号注册类型 |
 | 软著（中国大陆） | 缺 | 若计划在国区销售强烈推荐先办软著，避免被举报下架 |
@@ -287,7 +287,7 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 □ 所有密码 / passphrase 经 Keychain（已实现）
 □ SFTP host-key TOFU（已实现基础校验）
 □ FTPS 默认严格 TLS（已实现；自签例外需收窄）
-□ 关于面板含第三方致谢 + 隐私政策链接（About 已有，隐私政策 URL 待补）
+□ 关于面板含第三方致谢 + 隐私政策链接（About 已有，隐私政策 URL 使用 GitHub Pages）
 
 [App Store Connect]
 □ AppIcon 16–1024 全套已就绪（已完成）+ Release `.app` / Finder / Dock / ASC 上传预检显示正常
@@ -300,7 +300,7 @@ MAS 上架仍需用 Apple Distribution/MAS provisioning profile 归档验证；�
 
 [法律]
 □ EULA（Apple 标准或自定义）
-□ 隐私政策 URL（公开 HTTPS）
+□ 隐私政策 URL（公开 HTTPS）：https://liuhuan086.github.io/app-pages/quay/privacy.html
 □ 商标 / 软著（中国大陆销售强烈建议）
 ```
 
