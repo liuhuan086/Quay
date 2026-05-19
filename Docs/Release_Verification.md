@@ -33,7 +33,7 @@ For App Store submission, export/upload from Xcode Organizer using Apple Distrib
 
 ## StoreKit Sandbox
 
-Read `Docs/Monetization_Compliance_Plan.md` before changing IAP behavior.
+Read `Docs/Monetization_Compliance_Plan.md` before changing IAP behavior. Use `Docs/AppStore_Submission_Materials.md` when preparing App Store Connect IAP metadata, review notes, screenshots, and privacy answers.
 
 Use product IDs:
 

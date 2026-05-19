@@ -204,6 +204,7 @@ private struct LockedAccessView: View {
                     disclosureBlock
                     purchaseActions
                     statusBlock
+                    supportActions
                 }
                 .padding(28)
                 .frame(maxWidth: 720, alignment: .leading)
@@ -358,6 +359,23 @@ private struct LockedAccessView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+        }
+    }
+
+    private var supportActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("产品信息", systemImage: "info.circle")
+                .font(.headline)
+            HStack(spacing: 14) {
+                Button("关于 SwiftFTP") {
+                    appState.presentAbout()
+                }
+                .buttonStyle(.bordered)
+
+                Link("隐私政策", destination: AppLinks.privacyPolicy)
+                Link("用户协议", destination: AppLinks.termsOfUse)
+            }
+            .font(.callout)
         }
     }
 
