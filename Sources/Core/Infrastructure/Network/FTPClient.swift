@@ -140,7 +140,7 @@ public final class FTPClient: AnyFTPClient {
             return try await self.receiveAll(on: dataConn)
         }
         let listing = String(data: data, encoding: .utf8) ?? ""
-        let mlsd = parseMLSD(listing, base: path)
+        let mlsd = Self.parseMLSD(listing, base: path)
         return mlsd.isEmpty
              ? try await listFallback(path)   // fallback to LIST
              : mlsd
@@ -154,7 +154,7 @@ public final class FTPClient: AnyFTPClient {
             return try await self.receiveAll(on: dataConn)
         }
         let listing = String(data: data, encoding: .utf8) ?? ""
-        return parseLIST(listing, base: path)
+        return Self.parseLIST(listing, base: path)
     }
 
     // MARK: - Create Directory
@@ -309,7 +309,7 @@ public final class FTPClient: AnyFTPClient {
         try await sendCtrl("PASV")
         let r = try await readControlLine()
         guard r.hasPrefix("227") else { throw FTPError.badResponse(r) }
-        let (host, port) = try parsePASV(r)
+        let (host, port) = try Self.parsePASV(r)
         let params: NWParameters = .tcp
         if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
             tcp.connectionTimeout = 15
@@ -351,7 +351,7 @@ public final class FTPClient: AnyFTPClient {
         return captured
     }
 
-    private func parsePASV(_ msg: String) throws -> (String, Int) {
+    static func parsePASV(_ msg: String) throws -> (String, Int) {
         guard let s = msg.firstIndex(of: "("), let e = msg.firstIndex(of: ")") else {
             throw FTPError.badResponse("Invalid PASV: \(msg)")
         }
@@ -437,12 +437,13 @@ public final class FTPClient: AnyFTPClient {
     }
 
     // MARK: - Parsers
-    private func parseMLSD(_ raw: String, base: String) -> [RemoteFileItem] {
-        raw.split(separator: "\n").compactMap { line -> RemoteFileItem? in
+    static func parseMLSD(_ raw: String, base: String) -> [RemoteFileItem] {
+        raw.split(whereSeparator: \.isNewline).compactMap { line -> RemoteFileItem? in
             let s = String(line)
             guard let spaceIdx = s.firstIndex(of: " ") else { return nil }
             let facts = String(s[s.startIndex..<spaceIdx])
-            let name  = String(s[s.index(after: spaceIdx)...]).trimmingCharacters(in: .whitespaces)
+            let name = String(s[s.index(after: spaceIdx)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             guard name != "." && name != ".." else { return nil }
 
             var isDir = false; var size: Int64 = 0; var date: Date? = nil
@@ -463,20 +464,22 @@ public final class FTPClient: AnyFTPClient {
         }
     }
 
-    private func parseLIST(_ raw: String, base: String) -> [RemoteFileItem] {
-        raw.split(separator: "\n").compactMap { line -> RemoteFileItem? in
+    static func parseLIST(_ raw: String, base: String) -> [RemoteFileItem] {
+        raw.split(whereSeparator: \.isNewline).compactMap { line -> RemoteFileItem? in
             let parts = line.split(separator: " ", omittingEmptySubsequences: true)
             guard parts.count >= 9 else { return nil }
             let perm = String(parts[0]); let isDir = perm.hasPrefix("d")
             let size = Int64(parts[4]) ?? 0
-            let name = parts[8...].joined(separator: " ")
+            let name = parts[8...]
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             guard name != "." && name != ".." else { return nil }
             return RemoteFileItem(name: name, path: joinedRemotePath(base: base, name: name),
                                   isDirectory: isDir, size: size, permissions: perm)
         }
     }
 
-    private func joinedRemotePath(base: String, name: String) -> String {
+    private static func joinedRemotePath(base: String, name: String) -> String {
         base.hasSuffix("/") ? base + name : base + "/" + name
     }
 
