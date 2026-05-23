@@ -803,6 +803,32 @@ final class ServerRepositoryTests: XCTestCase {
         }
     }
 
+    private final class MemoryKeychain: KeychainStoring, @unchecked Sendable {
+        private let lock = NSLock()
+        private var passwords: [String: String] = [:]
+
+        func savePassword(_ password: String, for key: String, label: String?) throws {
+            lock.lock()
+            passwords[key] = password
+            lock.unlock()
+        }
+
+        func getPassword(for key: String) throws -> String? {
+            lock.lock()
+            let password = passwords[key]
+            lock.unlock()
+            return password
+        }
+
+        @discardableResult
+        func deletePassword(for key: String) -> Bool {
+            lock.lock()
+            passwords.removeValue(forKey: key)
+            lock.unlock()
+            return true
+        }
+    }
+
     func test_unrelatedWritePreservesLegacyWhenKeychainMigrationFails() async throws {
         let failKey = "swiftftp.tests.failkc.\(UUID().uuidString)"
         let repo = ServerRepository(key: failKey, keychain: AlwaysFailingKeychain())
@@ -911,6 +937,59 @@ final class ServerRepositoryTests: XCTestCase {
         try await repo.update(updated)
         let freshPassword = try await repo.password(for: id)
         XCTAssertEqual(freshPassword, "fresh-secret")
+    }
+
+    func test_updateWithEmptyPasswordPreservesExistingCredential() async throws {
+        let isolatedKey = "swiftftp.tests.memory.\(UUID().uuidString)"
+        let repo = ServerRepository(key: isolatedKey, keychain: MemoryKeychain())
+        defer { UserDefaults.standard.removeObject(forKey: isolatedKey) }
+
+        var config = makeCfg("Preserve Password", password: "old-secret")
+        try await repo.save(config)
+
+        config.displayName = "Renamed"
+        config.password = ""
+        try await repo.update(config)
+
+        let password = try await repo.password(for: config.id)
+        XCTAssertEqual(password, "old-secret")
+        XCTAssertEqual(repo.fetchAll().first(where: { $0.id == config.id })?.displayName, "Renamed")
+    }
+
+    func test_replacePolicyWithEmptyPasswordDeletesExistingCredential() async throws {
+        let isolatedKey = "swiftftp.tests.memory.\(UUID().uuidString)"
+        let repo = ServerRepository(key: isolatedKey, keychain: MemoryKeychain())
+        defer { UserDefaults.standard.removeObject(forKey: isolatedKey) }
+
+        var config = makeCfg("Delete Password", password: "old-secret")
+        try await repo.save(config)
+
+        config.password = ""
+        try await repo.save(config, credentialPolicy: .replace)
+
+        let password = try await repo.password(for: config.id)
+        XCTAssertEqual(password, "")
+    }
+
+    func test_importJSONMigratesPasswordToInjectedKeychainAndStripsDefaults() async throws {
+        let isolatedKey = "swiftftp.tests.memory.\(UUID().uuidString)"
+        let repo = ServerRepository(key: isolatedKey, keychain: MemoryKeychain())
+        defer { UserDefaults.standard.removeObject(forKey: isolatedKey) }
+
+        let id = UUID()
+        let json = """
+        [{"id":"\(id.uuidString)","displayName":"Imported","host":"import.local","username":"u","password":"import-secret"}]
+        """
+
+        try await repo.importJSON(Data(json.utf8))
+
+        let password = try await repo.password(for: id)
+        XCTAssertEqual(password, "import-secret")
+        let persisted = UserDefaults.standard.data(forKey: isolatedKey).flatMap {
+            String(data: $0, encoding: .utf8)
+        } ?? ""
+        XCTAssertFalse(persisted.contains("import-secret"))
+        XCTAssertFalse(persisted.contains("\"password\""))
     }
 
     func test_sortedByDisplayName() async throws {
