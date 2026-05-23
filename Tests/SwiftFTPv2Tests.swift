@@ -214,6 +214,204 @@ final class TransferEngineQueueTests: XCTestCase {
     }
 }
 
+final class TransferEngineExecutionTests: XCTestCase {
+    private enum WaitError: Error {
+        case timedOut
+    }
+
+    func test_uploadCompletesAndCreatesRemoteParents() async throws {
+        let server = makeServer()
+        let client = FakeFTPClient(config: server)
+        let localURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("upload.txt")
+        let task = TransferTask(
+            serverID: server.id,
+            serverName: server.displayName,
+            direction: .upload,
+            localURL: localURL,
+            remotePath: "/var/www/app/upload.txt",
+            fileSize: 100
+        )
+
+        try await withRegisteredPool(server: server, client: client) {
+            let engine = TransferEngine(retryDelay: 0.01)
+
+            await engine.enqueue(task)
+            let completed = try await waitForTask(task.id, in: engine, matching: isCompleted)
+
+            XCTAssertEqual(completed.status, .completed)
+            XCTAssertNotNil(completed.completedAt)
+            XCTAssertEqual(client.createdDirectoryValues(), ["/var", "/var/www", "/var/www/app"])
+            XCTAssertEqual(client.uploadCallValues(), [
+                FakeTransferCall(localPath: localURL.path, remotePath: "/var/www/app/upload.txt", offset: 0)
+            ])
+        }
+    }
+
+    func test_downloadCompletesWithoutCreatingRemoteParents() async throws {
+        let server = makeServer()
+        let client = FakeFTPClient(config: server)
+        let localURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("download.txt")
+        let task = TransferTask(
+            serverID: server.id,
+            serverName: server.displayName,
+            direction: .download,
+            localURL: localURL,
+            remotePath: "/var/www/app/download.txt",
+            fileSize: 100
+        )
+
+        try await withRegisteredPool(server: server, client: client) {
+            let engine = TransferEngine(retryDelay: 0.01)
+
+            await engine.enqueue(task)
+            let completed = try await waitForTask(task.id, in: engine, matching: isCompleted)
+
+            XCTAssertEqual(completed.status, .completed)
+            XCTAssertTrue(client.createdDirectoryValues().isEmpty)
+            XCTAssertEqual(client.downloadCallValues(), [
+                FakeTransferCall(localPath: localURL.path, remotePath: "/var/www/app/download.txt", offset: 0)
+            ])
+        }
+    }
+
+    func test_retriableUploadFailureRetriesAndCompletes() async throws {
+        let server = makeServer()
+        let client = FakeFTPClient(config: server)
+        client.enqueueUploadOutcome(.fail(.connectionFailed("temporary reset")))
+        let localURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("retry.txt")
+        let task = TransferTask(
+            serverID: server.id,
+            serverName: server.displayName,
+            direction: .upload,
+            localURL: localURL,
+            remotePath: "/retry.txt",
+            fileSize: 100
+        )
+
+        try await withRegisteredPool(server: server, client: client) {
+            let engine = TransferEngine(retryDelay: 0.01)
+
+            await engine.enqueue(task)
+            let completed = try await waitForTask(task.id, in: engine, matching: isCompleted)
+
+            XCTAssertEqual(completed.status, .completed)
+            XCTAssertEqual(completed.retryCount, 1)
+            XCTAssertEqual(client.uploadCallValues().count, 2)
+        }
+    }
+
+    func test_nonRetriableUploadFailureFailsWithoutRetry() async throws {
+        let server = makeServer()
+        let client = FakeFTPClient(config: server)
+        client.enqueueUploadOutcome(.fail(.authenticationFailed))
+        let task = TransferTask(
+            serverID: server.id,
+            serverName: server.displayName,
+            direction: .upload,
+            localURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("auth.txt"),
+            remotePath: "/auth.txt",
+            fileSize: 100
+        )
+
+        try await withRegisteredPool(server: server, client: client) {
+            let engine = TransferEngine(retryDelay: 0.01)
+
+            await engine.enqueue(task)
+            let failed = try await waitForTask(task.id, in: engine, matching: isFailed)
+
+            XCTAssertEqual(failed.retryCount, 0)
+            XCTAssertEqual(client.uploadCallValues().count, 1)
+            guard case .failed(let message) = failed.status else {
+                return XCTFail("Expected failed status")
+            }
+            XCTAssertTrue(message.contains("用户名") || message.contains("密码"))
+        }
+    }
+
+    func test_missingConnectionPoolFailsTaskWithoutClientWork() async throws {
+        let server = makeServer()
+        let engine = TransferEngine(retryDelay: 0.01)
+        let task = TransferTask(
+            serverID: server.id,
+            serverName: server.displayName,
+            direction: .upload,
+            localURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-pool.txt"),
+            remotePath: "/missing-pool.txt",
+            fileSize: 100
+        )
+
+        await ConnectionPoolRegistry.shared.removePool(for: server.id)
+        await engine.enqueue(task)
+        let failed = try await waitForTask(task.id, in: engine, matching: isFailed)
+
+        guard case .failed(let message) = failed.status else {
+            return XCTFail("Expected failed status")
+        }
+        XCTAssertTrue(message.contains("连接池不存在"))
+    }
+
+    private func withRegisteredPool(
+        server: ServerConfig,
+        client: FakeFTPClient,
+        _ body: () async throws -> Void
+    ) async throws {
+        let factory = FakeClientFactory([client])
+        _ = await ConnectionPoolRegistry.shared.pool(
+            for: server,
+            maxSize: 1,
+            clientFactory: factory.makeClient
+        )
+        do {
+            try await body()
+            await ConnectionPoolRegistry.shared.removePool(for: server.id)
+        } catch {
+            await ConnectionPoolRegistry.shared.removePool(for: server.id)
+            throw error
+        }
+    }
+
+    private func waitForTask(
+        _ id: UUID,
+        in engine: TransferEngine,
+        timeout: TimeInterval = 2,
+        matching predicate: (TransferTask) -> Bool
+    ) async throws -> TransferTask {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastTask: TransferTask?
+
+        while Date() < deadline {
+            let tasks = await engine.allTasks()
+            if let task = tasks.first(where: { $0.id == id }) {
+                lastTask = task
+                if predicate(task) {
+                    return task
+                }
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for task \(id). Last status: \(String(describing: lastTask?.status))")
+        throw WaitError.timedOut
+    }
+
+    private func isCompleted(_ task: TransferTask) -> Bool {
+        if case .completed = task.status { return true }
+        return false
+    }
+
+    private func isFailed(_ task: TransferTask) -> Bool {
+        if case .failed = task.status { return true }
+        return false
+    }
+
+    private func makeServer() -> ServerConfig {
+        ServerConfig(displayName: "EngineTest", host: "engine.test", username: "u", protocol_: .sftp)
+    }
+}
+
 // MARK: - TransferProgress Tests
 final class TransferProgressTests: XCTestCase {
 
@@ -942,6 +1140,17 @@ final class ContinuationBoxTests: XCTestCase {
 }
 
 // MARK: - ConnectionPool Tests
+private struct FakeTransferCall: Equatable, Sendable {
+    let localPath: String
+    let remotePath: String
+    let offset: Int64
+}
+
+private enum FakeTransferOutcome: Sendable {
+    case succeed
+    case fail(FTPError)
+}
+
 private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
     let config: ServerConfig
     let supportsResume: Bool = true
@@ -951,6 +1160,11 @@ private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
     private var connectError: Error?
     private var connectPasswords: [String] = []
     private var disconnectCalls = 0
+    private var createdDirectories: [String] = []
+    private var uploadCalls: [FakeTransferCall] = []
+    private var uploadOutcomes: [FakeTransferOutcome] = []
+    private var downloadCalls: [FakeTransferCall] = []
+    private var downloadOutcomes: [FakeTransferOutcome] = []
 
     init(config: ServerConfig) {
         self.config = config
@@ -972,6 +1186,26 @@ private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
         locked { disconnectCalls }
     }
 
+    func createdDirectoryValues() -> [String] {
+        locked { createdDirectories }
+    }
+
+    func uploadCallValues() -> [FakeTransferCall] {
+        locked { uploadCalls }
+    }
+
+    func downloadCallValues() -> [FakeTransferCall] {
+        locked { downloadCalls }
+    }
+
+    func enqueueUploadOutcome(_ outcome: FakeTransferOutcome) {
+        locked { uploadOutcomes.append(outcome) }
+    }
+
+    func enqueueDownloadOutcome(_ outcome: FakeTransferOutcome) {
+        locked { downloadOutcomes.append(outcome) }
+    }
+
     func connect(password: String) async throws {
         let error = locked { () -> Error? in
             connectPasswords.append(password)
@@ -989,7 +1223,9 @@ private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
     }
 
     func listDirectory(_ path: String) async throws -> [RemoteFileItem] { [] }
-    func createDirectory(_ path: String) async throws {}
+    func createDirectory(_ path: String) async throws {
+        locked { createdDirectories.append(path) }
+    }
     func delete(path: String, isDirectory: Bool) async throws {}
     func rename(from: String, to: String) async throws {}
     func setPermissions(_ octal: Int, path: String) async throws {}
@@ -999,14 +1235,44 @@ private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
         remotePath: String,
         offset: Int64,
         onProgress: @Sendable @escaping (TransferProgress) -> Void
-    ) async throws {}
+    ) async throws {
+        let outcome = locked { () -> FakeTransferOutcome in
+            uploadCalls.append(FakeTransferCall(
+                localPath: localURL.path,
+                remotePath: remotePath,
+                offset: offset
+            ))
+            return uploadOutcomes.isEmpty ? .succeed : uploadOutcomes.removeFirst()
+        }
+        switch outcome {
+        case .succeed:
+            onProgress(TransferProgress(bytesTransferred: 100, totalBytes: 100, bytesPerSecond: 50))
+        case .fail(let error):
+            throw error
+        }
+    }
 
     func download(
         remotePath: String,
         localURL: URL,
         offset: Int64,
         onProgress: @Sendable @escaping (TransferProgress) -> Void
-    ) async throws {}
+    ) async throws {
+        let outcome = locked { () -> FakeTransferOutcome in
+            downloadCalls.append(FakeTransferCall(
+                localPath: localURL.path,
+                remotePath: remotePath,
+                offset: offset
+            ))
+            return downloadOutcomes.isEmpty ? .succeed : downloadOutcomes.removeFirst()
+        }
+        switch outcome {
+        case .succeed:
+            onProgress(TransferProgress(bytesTransferred: 100, totalBytes: 100, bytesPerSecond: 50))
+        case .fail(let error):
+            throw error
+        }
+    }
 
     func fileSize(at path: String) async throws -> Int64 { 0 }
 
