@@ -7,7 +7,7 @@ import Foundation
 actor TransferEngine {
     // MARK: Config
     var maxConcurrent: Int = 3
-    private let retryDelay: TimeInterval = 2.0
+    private let retryDelay: TimeInterval
     private let startsTasksAutomatically: Bool
 
     // MARK: State
@@ -20,8 +20,9 @@ actor TransferEngine {
     var onComplete: (@Sendable (TransferTask) -> Void)?
     var onFailure: (@Sendable (TransferTask) -> Void)?
 
-    init(startsTasksAutomatically: Bool = true) {
+    init(startsTasksAutomatically: Bool = true, retryDelay: TimeInterval = 2.0) {
         self.startsTasksAutomatically = startsTasksAutomatically
+        self.retryDelay = retryDelay
     }
 
     // MARK: - Enqueue
