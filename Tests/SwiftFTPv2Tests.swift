@@ -1084,6 +1084,56 @@ final class FTPErrorTests: XCTestCase {
     }
 }
 
+final class FTPClientParserTests: XCTestCase {
+
+    func test_parsePASVExtractsHostAndPort() throws {
+        let (host, port) = try FTPClient.parsePASV("227 Entering Passive Mode (192,168,1,2,195,80)")
+
+        XCTAssertEqual(host, "192.168.1.2")
+        XCTAssertEqual(port, 50_000)
+    }
+
+    func test_parsePASVRejectsMalformedResponses() {
+        XCTAssertThrowsError(try FTPClient.parsePASV("227 Passive Mode unavailable"))
+        XCTAssertThrowsError(try FTPClient.parsePASV("227 Entering Passive Mode (192,168,1,2,195)"))
+    }
+
+    func test_parseMLSDParsesFactsAndSkipsDotEntries() {
+        let raw = """
+        type=dir;modify=20260102030405; docs\r
+        type=file;size=42;modify=20260102030506; report final.txt\r
+        type=file;size=1; .\r
+        type=file;size=1; ..\r
+        """
+
+        let items = FTPClient.parseMLSD(raw, base: "/public")
+
+        XCTAssertEqual(items.map(\.name), ["docs", "report final.txt"])
+        XCTAssertEqual(items.map(\.path), ["/public/docs", "/public/report final.txt"])
+        XCTAssertTrue(items[0].isDirectory)
+        XCTAssertFalse(items[1].isDirectory)
+        XCTAssertEqual(items[1].size, 42)
+        XCTAssertNotNil(items[1].modifiedDate)
+    }
+
+    func test_parseLISTParsesUnixListingsWithNamesContainingSpaces() {
+        let raw = """
+        drwxr-xr-x  2 owner group 4096 Jan 10 12:30 docs\r
+        -rw-r--r--  1 owner group 1234 Feb  2  2025 report final.txt\r
+        -rw-r--r--  1 owner group 1 Feb  2  2025 .\r
+        """
+
+        let items = FTPClient.parseLIST(raw, base: "/")
+
+        XCTAssertEqual(items.map(\.name), ["docs", "report final.txt"])
+        XCTAssertEqual(items.map(\.path), ["/docs", "/report final.txt"])
+        XCTAssertEqual(items[0].permissions, "drwxr-xr-x")
+        XCTAssertTrue(items[0].isDirectory)
+        XCTAssertFalse(items[1].isDirectory)
+        XCTAssertEqual(items[1].size, 1234)
+    }
+}
+
 // MARK: - KnownHosts Tests
 final class KnownHostsManagerTests: XCTestCase {
     private var fileURL: URL!
