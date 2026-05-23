@@ -942,19 +942,237 @@ final class ContinuationBoxTests: XCTestCase {
 }
 
 // MARK: - ConnectionPool Tests
+private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
+    let config: ServerConfig
+    let supportsResume: Bool = true
+
+    private let lock = NSLock()
+    private var connected = false
+    private var connectError: Error?
+    private var connectPasswords: [String] = []
+    private var disconnectCalls = 0
+
+    init(config: ServerConfig) {
+        self.config = config
+    }
+
+    var isConnected: Bool {
+        get async { locked { connected } }
+    }
+
+    func setConnectError(_ error: Error?) {
+        locked { connectError = error }
+    }
+
+    func connectPasswordValues() -> [String] {
+        locked { connectPasswords }
+    }
+
+    func disconnectCallCount() -> Int {
+        locked { disconnectCalls }
+    }
+
+    func connect(password: String) async throws {
+        let error = locked { () -> Error? in
+            connectPasswords.append(password)
+            return connectError
+        }
+        if let error { throw error }
+        locked { connected = true }
+    }
+
+    func disconnect() async {
+        locked {
+            connected = false
+            disconnectCalls += 1
+        }
+    }
+
+    func listDirectory(_ path: String) async throws -> [RemoteFileItem] { [] }
+    func createDirectory(_ path: String) async throws {}
+    func delete(path: String, isDirectory: Bool) async throws {}
+    func rename(from: String, to: String) async throws {}
+    func setPermissions(_ octal: Int, path: String) async throws {}
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        offset: Int64,
+        onProgress: @Sendable @escaping (TransferProgress) -> Void
+    ) async throws {}
+
+    func download(
+        remotePath: String,
+        localURL: URL,
+        offset: Int64,
+        onProgress: @Sendable @escaping (TransferProgress) -> Void
+    ) async throws {}
+
+    func fileSize(at path: String) async throws -> Int64 { 0 }
+
+    @discardableResult
+    private func locked<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+}
+
+private final class FakeClientFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var queuedClients: [FakeFTPClient]
+    private var createdCount = 0
+
+    init(_ clients: [FakeFTPClient]) {
+        self.queuedClients = clients
+    }
+
+    func makeClient(for config: ServerConfig) -> any AnyFTPClient {
+        lock.lock()
+        defer { lock.unlock() }
+        createdCount += 1
+        if !queuedClients.isEmpty {
+            return queuedClients.removeFirst()
+        }
+        return FakeFTPClient(config: config)
+    }
+
+    func makeCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return createdCount
+    }
+}
+
 final class ConnectionPoolTests: XCTestCase {
 
-    func test_pool_creates_connection_up_to_max() async throws {
-        // Can't easily test with real FTP server in unit tests.
-        // Test the pool's eviction and state management.
-        let config = ServerConfig(displayName: "PoolTest", host: "127.0.0.1",
-                                  port: 9999, username: "u", protocol_: .ftp)
-        let pool = ConnectionPool(serverConfig: config, maxSize: 2)
+    func test_pool_reusesReturnedConnectedClient() async throws {
+        let config = makeConfig()
+        let client = FakeFTPClient(config: config)
+        let factory = FakeClientFactory([client])
+        let pool = ConnectionPool(serverConfig: config, maxSize: 2, clientFactory: factory.makeClient)
 
-        // Disconnect all (no-op on empty pool)
+        let borrowed = try await pool.borrowClient(password: "secret")
+        XCTAssertTrue((borrowed as AnyObject) === client)
+        await pool.returnClient(borrowed)
+
+        let borrowedAgain = try await pool.borrowClient()
+        XCTAssertTrue((borrowedAgain as AnyObject) === client)
+        XCTAssertEqual(factory.makeCount(), 1)
+        let totalCount = await pool.totalCount
+        XCTAssertEqual(totalCount, 1)
+        XCTAssertEqual(client.connectPasswordValues(), ["secret"])
+    }
+
+    func test_pool_handsReturnedClientToNextWaiterWhenFull() async throws {
+        let config = makeConfig()
+        let client = FakeFTPClient(config: config)
+        let pool = ConnectionPool(
+            serverConfig: config,
+            maxSize: 1,
+            clientFactory: FakeClientFactory([client]).makeClient
+        )
+
+        let borrowed = try await pool.borrowClient()
+        let waitingBorrow = Task { try await pool.borrowClient() }
+
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let activeCountBeforeReturn = await pool.activeCount
+        XCTAssertEqual(activeCountBeforeReturn, 1)
+
+        await pool.returnClient(borrowed)
+        let handedOff = try await waitingBorrow.value
+
+        XCTAssertTrue((handedOff as AnyObject) === client)
+        let activeCountAfterHandoff = await pool.activeCount
+        XCTAssertEqual(activeCountAfterHandoff, 1)
+
+        await pool.returnClient(handedOff)
+        let activeCountAfterReturn = await pool.activeCount
+        XCTAssertEqual(activeCountAfterReturn, 0)
+    }
+
+    func test_pool_replacesDisconnectedIdleClient() async throws {
+        let config = makeConfig()
+        let staleClient = FakeFTPClient(config: config)
+        let replacement = FakeFTPClient(config: config)
+        let factory = FakeClientFactory([staleClient, replacement])
+        let pool = ConnectionPool(serverConfig: config, maxSize: 1, clientFactory: factory.makeClient)
+
+        let borrowed = try await pool.borrowClient()
+        await pool.returnClient(borrowed)
+        await staleClient.disconnect()
+
+        let borrowedAgain = try await pool.borrowClient()
+
+        XCTAssertTrue((borrowedAgain as AnyObject) === replacement)
+        XCTAssertEqual(factory.makeCount(), 2)
+        let totalCount = await pool.totalCount
+        XCTAssertEqual(totalCount, 1)
+    }
+
+    func test_pool_removesReservedSlotWhenConnectFails() async throws {
+        let config = makeConfig()
+        let client = FakeFTPClient(config: config)
+        client.setConnectError(FTPError.authenticationFailed)
+        let factory = FakeClientFactory([client])
+        let pool = ConnectionPool(serverConfig: config, maxSize: 1, clientFactory: factory.makeClient)
+
+        do {
+            _ = try await pool.borrowClient(password: "bad-password")
+            XCTFail("Expected connect failure")
+        } catch FTPError.authenticationFailed {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let totalCount = await pool.totalCount
+        let activeCount = await pool.activeCount
+        XCTAssertEqual(totalCount, 0)
+        XCTAssertEqual(activeCount, 0)
+        XCTAssertEqual(factory.makeCount(), 1)
+        XCTAssertEqual(client.connectPasswordValues(), ["bad-password"])
+    }
+
+    func test_disconnectAllResumesWaitersWithNotConnected() async throws {
+        let config = makeConfig()
+        let client = FakeFTPClient(config: config)
+        let pool = ConnectionPool(
+            serverConfig: config,
+            maxSize: 1,
+            clientFactory: FakeClientFactory([client]).makeClient
+        )
+
+        _ = try await pool.borrowClient()
+        let waitingBorrow = Task { try await pool.borrowClient() }
+
+        try await Task.sleep(nanoseconds: 20_000_000)
         await pool.disconnectAll()
-        let count = await pool.totalCount
-        XCTAssertEqual(count, 0)
+
+        do {
+            _ = try await waitingBorrow.value
+            XCTFail("Expected waiter to be resumed with notConnected")
+        } catch FTPError.notConnected {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let isConnected = await client.isConnected
+        XCTAssertFalse(isConnected)
+        XCTAssertEqual(client.disconnectCallCount(), 1)
+        let totalCount = await pool.totalCount
+        XCTAssertEqual(totalCount, 0)
+    }
+
+    private func makeConfig() -> ServerConfig {
+        ServerConfig(
+            displayName: "PoolTest",
+            host: "pool.test",
+            username: "u",
+            protocol_: .sftp
+        )
     }
 }
 

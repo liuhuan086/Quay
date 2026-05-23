@@ -10,6 +10,8 @@ private struct PoolEntry {
     var lastUsed: Date
 }
 
+typealias ConnectionClientFactory = @Sendable (ServerConfig) -> any AnyFTPClient
+
 // MARK: - ConnectionPool
 /// Provides a fixed-size pool of reusable connections to a single server.
 /// Callers `borrow` a client, use it, then `return` it.
@@ -18,6 +20,7 @@ actor ConnectionPool {
     private let serverConfig: ServerConfig
     private let maxSize: Int
     private let idleTimeout: TimeInterval
+    private let clientFactory: ConnectionClientFactory
     private var password: String
 
     // MARK: State
@@ -25,10 +28,16 @@ actor ConnectionPool {
     private var waiters: [CheckedContinuation<any AnyFTPClient, Error>] = []
 
     // MARK: Init
-    init(serverConfig: ServerConfig, maxSize: Int = 5, idleTimeout: TimeInterval = 120) {
+    init(
+        serverConfig: ServerConfig,
+        maxSize: Int = 5,
+        idleTimeout: TimeInterval = 120,
+        clientFactory: @escaping ConnectionClientFactory = ClientFactory.makeClient
+    ) {
         self.serverConfig = serverConfig
         self.maxSize      = maxSize
         self.idleTimeout  = idleTimeout
+        self.clientFactory = clientFactory
         self.password     = serverConfig.password
     }
 
@@ -65,7 +74,7 @@ actor ConnectionPool {
 
             // 2. Pool not full — reserve a slot synchronously, then connect.
             if entries.count < maxSize {
-                let client = ClientFactory.makeClient(for: serverConfig)
+                let client = clientFactory(serverConfig)
                 let placeholder = PoolEntry(client: client, inUse: true, lastUsed: Date())
                 entries.append(placeholder)
                 do {
@@ -139,9 +148,13 @@ actor ConnectionPoolRegistry {
     static let shared = ConnectionPoolRegistry()
     private var pools: [UUID: ConnectionPool] = [:]
 
-    func pool(for server: ServerConfig, maxSize: Int = 5) -> ConnectionPool {
+    func pool(
+        for server: ServerConfig,
+        maxSize: Int = 5,
+        clientFactory: @escaping ConnectionClientFactory = ClientFactory.makeClient
+    ) -> ConnectionPool {
         if let existing = pools[server.id] { return existing }
-        let pool = ConnectionPool(serverConfig: server, maxSize: maxSize)
+        let pool = ConnectionPool(serverConfig: server, maxSize: maxSize, clientFactory: clientFactory)
         pools[server.id] = pool
         return pool
     }
