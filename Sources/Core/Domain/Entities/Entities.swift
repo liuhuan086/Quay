@@ -9,7 +9,20 @@ public enum ConnectionProtocol: String, Codable, CaseIterable, Identifiable, Sen
     case sftp = "SFTP"
 
     public var id: String { rawValue }
-    public var defaultPort: Int { self == .sftp ? 22 : 21 }
+    public var defaultPort: Int {
+        switch self {
+        case .ftp: return 21
+        case .ftps: return 990
+        case .sftp: return 22
+        }
+    }
+    public var displayName: String {
+        switch self {
+        case .ftp: return "FTP"
+        case .ftps: return "FTPS（隐式）"
+        case .sftp: return "SFTP"
+        }
+    }
     public var isSecure: Bool { self != .ftp }
     public var sfSymbol: String {
         switch self {
@@ -49,6 +62,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
     public var useSSHKey: Bool
     public var sshKeyPath: String?
     public var sshKeyBookmark: Data?
+    public var allowLegacySSHAlgorithms: Bool
     public var allowSelfSignedTLS: Bool
     // Runtime-only credential loaded from Keychain. Decoding accepts legacy JSON
     // passwords for migration, but encoding never persists this field.
@@ -68,6 +82,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         groupName: String? = nil, colorLabel: ServerColorLabel? = nil,
         notes: String = "", useSSHKey: Bool = false, sshKeyPath: String? = nil,
         sshKeyBookmark: Data? = nil,
+        allowLegacySSHAlgorithms: Bool = false,
         allowSelfSignedTLS: Bool = false,
         password: String = "",
         createdAt: Date = Date(), lastConnectedAt: Date? = nil
@@ -86,6 +101,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         self.useSSHKey       = useSSHKey
         self.sshKeyPath      = sshKeyPath
         self.sshKeyBookmark  = sshKeyBookmark
+        self.allowLegacySSHAlgorithms = allowLegacySSHAlgorithms
         self.allowSelfSignedTLS = allowSelfSignedTLS
         self.password        = password
         self.createdAt       = createdAt
@@ -110,6 +126,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         case useSSHKey
         case sshKeyPath
         case sshKeyBookmark
+        case allowLegacySSHAlgorithms
         case allowSelfSignedTLS
         case password
         case createdAt
@@ -133,6 +150,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         self.useSSHKey = try c.decodeIfPresent(Bool.self, forKey: .useSSHKey) ?? false
         self.sshKeyPath = try c.decodeIfPresent(String.self, forKey: .sshKeyPath)
         self.sshKeyBookmark = try c.decodeIfPresent(Data.self, forKey: .sshKeyBookmark)
+        self.allowLegacySSHAlgorithms = try c.decodeIfPresent(Bool.self, forKey: .allowLegacySSHAlgorithms) ?? false
         self.allowSelfSignedTLS = try c.decodeIfPresent(Bool.self, forKey: .allowSelfSignedTLS) ?? false
         self.password = try c.decodeIfPresent(String.self, forKey: .password) ?? ""
         self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
@@ -155,6 +173,7 @@ public struct ServerConfig: Identifiable, Codable, Equatable, Hashable, Sendable
         try c.encode(useSSHKey, forKey: .useSSHKey)
         try c.encodeIfPresent(sshKeyPath, forKey: .sshKeyPath)
         try c.encodeIfPresent(sshKeyBookmark, forKey: .sshKeyBookmark)
+        try c.encode(allowLegacySSHAlgorithms, forKey: .allowLegacySSHAlgorithms)
         try c.encode(allowSelfSignedTLS, forKey: .allowSelfSignedTLS)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(lastConnectedAt, forKey: .lastConnectedAt)
@@ -202,10 +221,19 @@ public struct RemoteFileItem: Identifiable, Equatable, Sendable {
         default:                                     return "doc"
         }
     }
+
+    public static func isSafePathComponent(_ name: String) -> Bool {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
+            return false
+        }
+        return !name.unicodeScalars.contains {
+            $0.value == 0 || $0.value == 10 || $0.value == 13
+        }
+    }
 }
 
 // MARK: - Transfer Task
-public enum TransferDirection: String, Sendable { case upload, download }
+public enum TransferDirection: String, Sendable, Hashable { case upload, download }
 
 public enum TransferStatus: Sendable, Equatable {
     case queued
@@ -219,7 +247,12 @@ public enum TransferStatus: Sendable, Equatable {
         switch (l, r) {
         case (.queued, .queued), (.completed, .completed), (.cancelled, .cancelled): return true
         case (.paused(let a), .paused(let b)): return a == b
-        default: return false
+        case (.inProgress(let lp, let ls), .inProgress(let rp, let rs)):
+            return lp == rp && ls == rs
+        case (.failed(let lhs), .failed(let rhs)):
+            return lhs == rhs
+        default:
+            return false
         }
     }
 

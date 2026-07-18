@@ -5,6 +5,12 @@ import Foundation
 
 // MARK: - TransferEngine
 actor TransferEngine {
+    private struct TransferTarget: Hashable {
+        let serverID: UUID
+        let direction: TransferDirection
+        let path: String
+    }
+
     // MARK: Config
     var maxConcurrent: Int = 3
     private let retryDelay: TimeInterval
@@ -14,6 +20,7 @@ actor TransferEngine {
     private var tasks: [TransferTask] = []
     private var runningIDs: Set<UUID> = []
     private var runningTasks: [UUID: Task<Void, Never>] = [:]
+    private var runningTargets: [UUID: TransferTarget] = [:]
 
     // MARK: Callbacks (Sendable closures → safe across actors)
     var onUpdate: (@Sendable (TransferTask) -> Void)?
@@ -38,36 +45,38 @@ actor TransferEngine {
 
     // MARK: - Pause / Cancel
     func cancel(id: UUID) {
+        let wasRunning = runningIDs.contains(id)
         runningTasks[id]?.cancel()
-        runningTasks.removeValue(forKey: id)
-        runningIDs.remove(id)
         if let idx = tasks.firstIndex(where: { $0.id == id }) {
             guard !tasks[idx].status.isCompletedOrCancelled else { return }
             tasks[idx].status = .cancelled
             notifyUpdate(tasks[idx])
         }
-        drainQueue()
+        if !wasRunning { drainQueue() }
     }
 
     func cancel(ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
         for id in ids {
+            let wasRunning = runningIDs.contains(id)
             runningTasks[id]?.cancel()
-            runningTasks.removeValue(forKey: id)
-            runningIDs.remove(id)
             if let idx = tasks.firstIndex(where: { $0.id == id }) {
                 guard !tasks[idx].status.isCompletedOrCancelled else { continue }
                 tasks[idx].status = .cancelled
                 notifyUpdate(tasks[idx])
+            }
+            if !wasRunning {
+                runningTasks.removeValue(forKey: id)
+                runningIDs.remove(id)
+                runningTargets.removeValue(forKey: id)
             }
         }
         drainQueue()
     }
 
     func pause(id: UUID) {
+        let wasRunning = runningIDs.contains(id)
         runningTasks[id]?.cancel()
-        runningTasks.removeValue(forKey: id)
-        runningIDs.remove(id)
         if let idx = tasks.firstIndex(where: { $0.id == id }) {
             switch tasks[idx].status {
             case .queued, .inProgress:
@@ -77,16 +86,16 @@ actor TransferEngine {
                 break
             }
         }
-        // Pausing a running task frees a concurrency slot; let the queue advance.
-        drainQueue()
+        // A running task keeps its slot until the underlying I/O has actually
+        // unwound, preventing a replacement for the same target from overlapping it.
+        if !wasRunning { drainQueue() }
     }
 
     func pause(ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
         for id in ids {
+            let wasRunning = runningIDs.contains(id)
             runningTasks[id]?.cancel()
-            runningTasks.removeValue(forKey: id)
-            runningIDs.remove(id)
             if let idx = tasks.firstIndex(where: { $0.id == id }) {
                 switch tasks[idx].status {
                 case .queued, .inProgress:
@@ -96,6 +105,11 @@ actor TransferEngine {
                 }
                 tasks[idx].status = .paused(resumeOffset: tasks[idx].bytesTransferred)
                 notifyUpdate(tasks[idx])
+            }
+            if !wasRunning {
+                runningTasks.removeValue(forKey: id)
+                runningIDs.remove(id)
+                runningTargets.removeValue(forKey: id)
             }
         }
         drainQueue()
@@ -166,8 +180,6 @@ actor TransferEngine {
         for task in runningTasks.values {
             task.cancel()
         }
-        runningTasks.removeAll()
-        runningIDs.removeAll()
         tasks.removeAll()
     }
 
@@ -177,8 +189,10 @@ actor TransferEngine {
         let existingIDs = Set(tasks.filter { ids.contains($0.id) }.map(\.id))
         for id in ids {
             runningTasks[id]?.cancel()
-            runningTasks.removeValue(forKey: id)
-            runningIDs.remove(id)
+            if !runningIDs.contains(id) {
+                runningTasks.removeValue(forKey: id)
+                runningTargets.removeValue(forKey: id)
+            }
         }
         tasks.removeAll { existingIDs.contains($0.id) }
         drainQueue()
@@ -194,12 +208,15 @@ actor TransferEngine {
         for task in queued {
             guard runningIDs.count < maxConcurrent else { break }
             guard !runningIDs.contains(task.id) else { continue }
+            let target = transferTarget(for: task)
+            guard !runningTargets.values.contains(target) else { continue }
             startTask(task)
         }
     }
 
     private func startTask(_ task: TransferTask) {
         runningIDs.insert(task.id)
+        runningTargets[task.id] = transferTarget(for: task)
         let t = Task {
             await executeTask(id: task.id)
         }
@@ -276,7 +293,10 @@ actor TransferEngine {
 
     // MARK: - Error handling + auto-retry
     private func handleError(id: UUID, error: Error) async {
-        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        guard let idx = tasks.firstIndex(where: { $0.id == id }) else {
+            finishRunningTaskWithoutStateChange(id: id)
+            return
+        }
         guard case .inProgress = tasks[idx].status else {
             finishRunningTaskWithoutStateChange(id: id)
             return
@@ -292,10 +312,21 @@ actor TransferEngine {
         if tasks[idx].retryCount < TransferTask.maxRetries {
             tasks[idx].retryCount += 1
             tasks[idx].status = .queued
+            notifyUpdate(tasks[idx])
+            do {
+                try await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+            } catch {
+                finishRunningTaskWithoutStateChange(id: id)
+                return
+            }
+            guard let current = tasks.first(where: { $0.id == id }),
+                  case .queued = current.status else {
+                finishRunningTaskWithoutStateChange(id: id)
+                return
+            }
             runningIDs.remove(id)
             runningTasks.removeValue(forKey: id)
-            notifyUpdate(tasks[idx])
-            try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+            runningTargets.removeValue(forKey: id)
             drainQueue()
         } else {
             markFailed(id: id, message: friendly.errorDescription ?? "传输失败")
@@ -368,6 +399,7 @@ actor TransferEngine {
         tasks[idx].completedAt = Date()
         runningIDs.remove(id)
         runningTasks.removeValue(forKey: id)
+        runningTargets.removeValue(forKey: id)
         let task = tasks[idx]
         notifyUpdate(task)
         onComplete?(task)
@@ -383,6 +415,7 @@ actor TransferEngine {
         tasks[idx].status = .failed(message: message)
         runningIDs.remove(id)
         runningTasks.removeValue(forKey: id)
+        runningTargets.removeValue(forKey: id)
         let task = tasks[idx]
         notifyUpdate(task)
         onFailure?(task)
@@ -411,6 +444,17 @@ actor TransferEngine {
     private func finishRunningTaskWithoutStateChange(id: UUID) {
         runningIDs.remove(id)
         runningTasks.removeValue(forKey: id)
+        runningTargets.removeValue(forKey: id)
         drainQueue()
+    }
+
+    private func transferTarget(for task: TransferTask) -> TransferTarget {
+        TransferTarget(
+            serverID: task.serverID,
+            direction: task.direction,
+            path: task.direction == .upload
+                ? task.remotePath
+                : task.localURL.standardizedFileURL.path
+        )
     }
 }

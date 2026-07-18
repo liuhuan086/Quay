@@ -65,6 +65,29 @@ public struct TransferProgress: Sendable {
     }
 }
 
+enum TransferFileStaging {
+    static func downloadURL(for destination: URL) -> URL {
+        destination.deletingLastPathComponent().appendingPathComponent(
+            ".\(destination.lastPathComponent).quay-download",
+            isDirectory: false
+        )
+    }
+
+    static func commitDownload(from stagedURL: URL, to destination: URL) throws {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: stagedURL)
+        } else {
+            try fileManager.moveItem(at: stagedURL, to: destination)
+        }
+    }
+
+    static func discardDownload(for destination: URL) {
+        let stagedURL = downloadURL(for: destination)
+        try? FileManager.default.removeItem(at: stagedURL)
+    }
+}
+
 // MARK: - FTP Errors
 public enum FTPError: LocalizedError, Sendable {
     case connectionFailed(String)

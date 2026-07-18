@@ -59,6 +59,12 @@ final class LocalFileVM: ObservableObject {
         }
     }
 
+    deinit {
+        if isAccessingScopedURL {
+            activeScopedURL?.stopAccessingSecurityScopedResource()
+        }
+    }
+
     func enter(_ item: LocalFileItem) {
         guard item.isDirectory else { return }
         navigate(to: item.url.path)

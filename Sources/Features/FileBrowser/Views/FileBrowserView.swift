@@ -693,7 +693,14 @@ struct FileBrowserView: View {
         destinationParentURL: URL
     ) async -> TransferPlan {
         var plan = TransferPlan()
-        let localURL = destinationParentURL.appendingPathComponent(item.name, isDirectory: item.isDirectory)
+        guard let localURL = safeLocalChildURL(
+            named: item.name,
+            in: destinationParentURL,
+            isDirectory: item.isDirectory
+        ) else {
+            plan.blockedMessages.append("远端返回了不安全的文件名，已拒绝下载：\(item.name)")
+            return plan
+        }
 
         if item.isDirectory {
             switch localDestinationState(for: localURL) {
@@ -753,7 +760,14 @@ struct FileBrowserView: View {
         do {
             let children = try await primaryClient.listDirectory(remoteItem.path)
             for child in children {
-                let childLocalURL = localDirectoryURL.appendingPathComponent(child.name, isDirectory: child.isDirectory)
+                guard let childLocalURL = safeLocalChildURL(
+                    named: child.name,
+                    in: localDirectoryURL,
+                    isDirectory: child.isDirectory
+                ) else {
+                    result.plan.blockedMessages.append("远端返回了不安全的文件名，已拒绝下载：\(child.name)")
+                    continue
+                }
                 if child.isDirectory {
                     if case .file = localDestinationState(for: childLocalURL) {
                         result.plan.blockedMessages.append("本地已存在同名文件，无法下载文件夹：\(childLocalURL.path)")
@@ -791,6 +805,18 @@ struct FileBrowserView: View {
             result.plan.blockedMessages.append("无法读取远端文件夹：\(remoteItem.path)。\(friendlyMessage(error))")
         }
         return result
+    }
+
+    private func safeLocalChildURL(named name: String, in parent: URL, isDirectory: Bool) -> URL? {
+        guard RemoteFileItem.isSafePathComponent(name) else { return nil }
+        let standardizedParent = parent.standardizedFileURL
+        let candidate = standardizedParent
+            .appendingPathComponent(name, isDirectory: isDirectory)
+            .standardizedFileURL
+        guard candidate.deletingLastPathComponent().path == standardizedParent.path else {
+            return nil
+        }
+        return candidate
     }
 
     @MainActor

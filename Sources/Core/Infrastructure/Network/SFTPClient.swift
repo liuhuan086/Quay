@@ -55,10 +55,15 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
 
     // MARK: - Connect
     public func connect(password: String) async throws {
+        guard (1...65_535).contains(config.port) else {
+            throw FTPError.connectionFailed("端口必须是 1–65535 之间的整数")
+        }
         let authMethod = try makeAuthenticationMethod(password: password)
 
-        // Enable RSA host keys + DiffieHellman key exchange for broader server compatibility.
-        let algorithms = SSHAlgorithms.all
+        // Citadel's broad compatibility preset also enables SHA-1 key exchange
+        // and legacy RSA signatures. Keep modern library defaults unless the
+        // user explicitly opts into compatibility for an older server.
+        let algorithms = config.allowLegacySSHAlgorithms ? SSHAlgorithms.all : SSHAlgorithms()
 
         do {
             let (ssh, sftp) = try await connectSFTP(
@@ -129,7 +134,7 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
             for nameEntry in nameEntries {
                 for component in nameEntry.components {
                     let name = component.filename
-                    guard name != "." && name != ".." else { continue }
+                    guard RemoteFileItem.isSafePathComponent(name) else { continue }
                     let attrs = component.attributes
                     let isDir = attrs.permissions.map { ($0 & 0o40000) != 0 } ?? false
                     let size = Int64(attrs.size ?? 0)
@@ -224,8 +229,14 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
         do {
             let attrs = try FileManager.default.attributesOfItem(atPath: localURL.path)
             let total = (attrs[.size] as? Int64) ?? 0
-            guard offset <= total else {
+            guard offset >= 0, offset <= total else {
                 throw FTPError.transferFailed("续传偏移量超过本地文件大小")
+            }
+            if offset > 0 {
+                let remoteAttributes = try await sftp.getAttributes(at: remotePath)
+                guard Int64(remoteAttributes.size ?? 0) == offset else {
+                    throw FTPError.resumeNotSupported
+                }
             }
 
             let flags: SFTPOpenFileFlags = offset > 0 ? [.create, .write] : [.create, .write, .truncate]
@@ -260,6 +271,10 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                     onProgress(TransferProgress(bytesTransferred: written, totalBytes: total, bytesPerSecond: bps))
                 }
             }
+            let finalAttributes = try await sftp.getAttributes(at: remotePath)
+            guard Int64(finalAttributes.size ?? 0) == total else {
+                throw FTPError.transferFailed("服务器上的文件大小与上传内容不一致")
+            }
             onProgress(TransferProgress(bytesTransferred: total, totalBytes: total, bytesPerSecond: 0))
         } catch let error as CancellationError {
             throw error
@@ -279,26 +294,29 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
         do {
             let attrs = try await sftp.getAttributes(at: remotePath)
             let total = Int64(attrs.size ?? 0)
-            guard offset <= total else {
+            let stagedURL = TransferFileStaging.downloadURL(for: localURL)
+            guard offset >= 0, offset <= total else {
                 throw FTPError.transferFailed("续传偏移量超过远端文件大小")
             }
 
             try FileManager.default.createDirectory(
                 at: localURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-            try await sftp.withFile(filePath: remotePath, flags: .read) { file in
+            let downloadedBytes: Int64 = try await sftp.withFile(filePath: remotePath, flags: .read) { file in
                 if offset > 0 {
-                    guard FileManager.default.fileExists(atPath: localURL.path) else {
+                    guard FileManager.default.fileExists(atPath: stagedURL.path),
+                          let localAttributes = try? FileManager.default.attributesOfItem(atPath: stagedURL.path),
+                          (localAttributes[.size] as? Int64) == offset else {
                         throw FTPError.transferFailed("本地续传文件不存在，请重新开始下载")
                     }
-                } else if FileManager.default.fileExists(atPath: localURL.path) {
-                    try FileManager.default.removeItem(at: localURL)
+                } else if FileManager.default.fileExists(atPath: stagedURL.path) {
+                    try FileManager.default.removeItem(at: stagedURL)
                 }
-                if !FileManager.default.fileExists(atPath: localURL.path) {
-                    FileManager.default.createFile(atPath: localURL.path, contents: nil)
+                if !FileManager.default.fileExists(atPath: stagedURL.path) {
+                    FileManager.default.createFile(atPath: stagedURL.path, contents: nil)
                 }
 
-                let handle = try FileHandle(forWritingTo: localURL)
+                let handle = try FileHandle(forWritingTo: stagedURL)
                 defer { try? handle.close() }
                 if offset > 0 {
                     try handle.truncate(atOffset: UInt64(offset))
@@ -317,7 +335,9 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                     let length = UInt32(min(UInt64(chunkSize), remaining))
                     var buffer = try await file.read(from: readOffset, length: length)
                     let readableBytes = buffer.readableBytes
-                    guard readableBytes > 0 else { break }
+                    guard readableBytes > 0 else {
+                        throw FTPError.transferFailed("远端文件在预期大小之前结束")
+                    }
 
                     let data = buffer.readData(length: readableBytes) ?? Data()
                     try handle.write(contentsOf: data)
@@ -333,9 +353,15 @@ public final class SFTPClient: @unchecked Sendable, AnyFTPClient {
                     }
                     onProgress(TransferProgress(bytesTransferred: transferred, totalBytes: total, bytesPerSecond: bps))
                 }
+                return Int64(readOffset)
             }
 
-            onProgress(TransferProgress(bytesTransferred: total, totalBytes: total, bytesPerSecond: 0))
+            guard downloadedBytes == total else {
+                throw FTPError.transferFailed("下载字节数不完整（\(downloadedBytes)/\(total)）")
+            }
+            try Task.checkCancellation()
+            try TransferFileStaging.commitDownload(from: stagedURL, to: localURL)
+            onProgress(TransferProgress(bytesTransferred: downloadedBytes, totalBytes: total, bytesPerSecond: 0))
         } catch let error as CancellationError {
             throw error
         } catch {
@@ -604,32 +630,29 @@ final class KnownHostsManager: @unchecked Sendable {
     }
 
     func validate(fingerprint: String, for host: String) throws {
-        lock.lock()
+        lock.lock(); defer { lock.unlock() }
         if let stored = store[host] {
-            lock.unlock()
             guard stored == fingerprint else {
                 throw FTPError.hostKeyMismatch(host)
             }
             return
         }
         store[host] = fingerprint
-        lock.unlock()
-        save()
-    }
-
-    func store(fingerprint: String, for host: String) {
-        lock.lock(); defer { lock.unlock() }
-        store[host] = fingerprint
-        save()
+        do {
+            try saveLocked()
+        } catch {
+            store.removeValue(forKey: host)
+            throw FTPError.connectionFailed("无法安全保存 \(host) 的 SSH 主机指纹：\(error.localizedDescription)")
+        }
     }
 
     private var fileURL: URL {
         if let fileURLOverride {
             return fileURLOverride
         }
-        // FIXME(AppSandbox): verify this resolves inside the app container once
-        // sandbox signing is enabled for Mac App Store builds.
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        // In a sandboxed build this resolves inside the app container.
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
         return support.appendingPathComponent("SwiftFTP/known_hosts.json")
     }
 
@@ -640,10 +663,15 @@ final class KnownHostsManager: @unchecked Sendable {
         store = dict
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(store) else { return }
-        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        try? data.write(to: fileURL)
+    /// Caller must hold `lock`; keeping serialization and the atomic replace in
+    /// the same critical section prevents concurrent first-use connections from
+    /// racing the security decision with persistence.
+    private func saveLocked() throws {
+        let data = try JSONEncoder().encode(store)
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: fileURL, options: .atomic)
     }
 }
