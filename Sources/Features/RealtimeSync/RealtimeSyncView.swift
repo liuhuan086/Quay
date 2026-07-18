@@ -11,6 +11,13 @@ actor SyncManager {
     var onFileChange: (@Sendable (FileChangeEvent, SyncWatcher) -> Void)?
     var onBookmarkStale: (@Sendable (SyncWatcher) -> Void)?
 
+    deinit {
+        watcher.stopWatching()
+        for url in scopedURLs {
+            url.stopAccessingSecurityScopedResource()
+        }
+    }
+
     func start(watchers: [SyncWatcher]) -> Set<UUID> {
         stopAll()
         let active = watchers.filter { $0.isActive }
@@ -157,6 +164,8 @@ final class RealtimeSyncViewModel: ObservableObject {
     private let appState: AppState
     private let server: ServerConfig
     private let syncManager = SyncManager()
+    private var stateCancellables = Set<AnyCancellable>()
+    private var lastAccessState: Bool
 
     var activeCount: Int { runningWatcherIDs.count }
     var hasFullAccess: Bool { appState.hasFullAccess }
@@ -164,8 +173,26 @@ final class RealtimeSyncViewModel: ObservableObject {
     init(appState: AppState, server: ServerConfig) {
         self.appState = appState
         self.server = server
+        self.lastAccessState = appState.hasFullAccess
         self.watchers = appState.syncWatchers.values.filter { $0.serverID == server.id }
         wireSyncManager()
+        appState.$syncWatchers
+            .dropFirst()
+            .sink { [weak self] stored in
+                guard let self else { return }
+                self.watchers = stored.values
+                    .filter { $0.serverID == self.server.id }
+                    .sorted { $0.localPath < $1.localPath }
+            }
+            .store(in: &stateCancellables)
+
+        appState.objectWillChange
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { [weak self] in
+                    self?.reconcileAccessState()
+                }
+            }
+            .store(in: &stateCancellables)
     }
 
     // MARK: - Add watcher
@@ -207,6 +234,7 @@ final class RealtimeSyncViewModel: ObservableObject {
     // MARK: - Wire sync events
     private func wireSyncManager() {
         let initialWatchers = watchers
+        let shouldStart = hasFullAccess
         Task {
             await syncManager.setCallback { [weak self] event, watcher in
                 Task { @MainActor [weak self] in
@@ -226,13 +254,6 @@ final class RealtimeSyncViewModel: ObservableObject {
                     self.recentEvents.insert((fileName, Date()), at: 0)
                     if self.recentEvents.count > 20 { self.recentEvents.removeLast() }
 
-                    // Update sync stats
-                    if let i = self.watchers.firstIndex(where: { $0.id == watcher.id }) {
-                        self.watchers[i].lastSyncAt = Date()
-                        self.watchers[i].totalSynced += 1
-                        self.appState.upsertSyncWatcher(self.watchers[i])
-                    }
-                    self.appState.notifications.sendSyncEvent(fileName: fileName, remotePath: remotePath)
                 }
             }
             await syncManager.setBookmarkStaleCallback { [weak self] watcher in
@@ -243,7 +264,9 @@ final class RealtimeSyncViewModel: ObservableObject {
                     )
                 }
             }
-            let runningIDs = await syncManager.start(watchers: initialWatchers)
+            let runningIDs = shouldStart
+                ? await syncManager.start(watchers: initialWatchers)
+                : []
             Task { @MainActor [weak self] in
                 self?.runningWatcherIDs = runningIDs
             }
@@ -251,6 +274,14 @@ final class RealtimeSyncViewModel: ObservableObject {
     }
 
     private func refreshWatcher() {
+        guard hasFullAccess else {
+            Task { [weak self] in
+                guard let self else { return }
+                await syncManager.stopAll()
+                await MainActor.run { self.runningWatcherIDs = [] }
+            }
+            return
+        }
         let currentWatchers = watchers
         Task { [weak self] in
             guard let self else { return }
@@ -259,6 +290,13 @@ final class RealtimeSyncViewModel: ObservableObject {
                 self.runningWatcherIDs = runningIDs
             }
         }
+    }
+
+    private func reconcileAccessState() {
+        let currentAccessState = hasFullAccess
+        guard currentAccessState != lastAccessState else { return }
+        lastAccessState = currentAccessState
+        refreshWatcher()
     }
 }
 

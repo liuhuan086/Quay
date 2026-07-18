@@ -18,10 +18,10 @@
     "url": "https://github.com/apple/swift-crypto"
   },
   {
-    "name": "NIOSSH",
+    "name": "NIOSSH (Wellz26 fork)",
     "license": "Apache License 2.0",
     "copyright": "Copyright (c) Apple Inc. and the NIOSSH project authors",
-    "url": "https://github.com/apple/swift-nio-ssh"
+    "url": "https://github.com/Wellz26/swift-nio-ssh"
   },
   {
     "name": "Swift ASN.1",

@@ -40,8 +40,8 @@ public final class FSEventWatcher: @unchecked Sendable {
     // MARK: - Start
     @discardableResult
     public func startWatching(paths: [String]) -> Bool {
-        // FIXME(AppSandbox): each watched path must come from a security-scoped
-        // bookmark before this is used in the Mac App Store sandbox.
+        // The caller owns security-scoped access for every path for the entire
+        // lifetime of this stream (SyncManager resolves persisted bookmarks).
         stopWatching()
         guard !paths.isEmpty else { return false }
 

@@ -260,7 +260,7 @@ private struct LockedAccessView: View {
                 .font(.headline)
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
                 GridRow { Text("名称").foregroundColor(.secondary); Text(server.displayName) }
-                GridRow { Text("协议").foregroundColor(.secondary); Text(server.protocol_.rawValue.uppercased()) }
+                GridRow { Text("协议").foregroundColor(.secondary); Text(server.protocol_.displayName) }
                 GridRow { Text("主机").foregroundColor(.secondary); Text(server.host) }
                 GridRow { Text("端口").foregroundColor(.secondary); Text("\(server.port)") }
                 GridRow { Text("用户").foregroundColor(.secondary); Text(server.username) }

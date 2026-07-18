@@ -226,6 +226,7 @@ final class ServerRepository: @unchecked Sendable {
         }
 
         func save(_ config: ServerConfig, credentialPolicy: CredentialPolicy) throws {
+            try validate(config)
             migrateLegacyPasswordsIfNeeded()
             let existing = loadList()
             let replacingExisting = existing.contains { $0.id == config.id }
@@ -283,18 +284,34 @@ final class ServerRepository: @unchecked Sendable {
         }
 
         func importJSON(_ data: Data) throws {
-            migrateLegacyPasswordsIfNeeded()
             let incoming = try ServerRepository.makeDecoder().decode([ServerConfig].self, from: data)
+            try incoming.forEach(validate)
+            migrateLegacyPasswordsIfNeeded()
             let existing = loadList()
             var all = existing
             var strippedIDs: Set<UUID> = []
-            for config in incoming where !all.contains(where: { $0.id == config.id }) {
-                try persistCredential(for: config, policy: .replace, shouldDeleteEmptyCredential: false)
-                var stored = config
-                stored.password = ""
-                stored.sshKeyBookmark = nil
-                all.append(stored)
-                strippedIDs.insert(config.id)
+            var newlyWrittenCredentialIDs: [UUID] = []
+            do {
+                for config in incoming where !all.contains(where: { $0.id == config.id }) {
+                    try persistCredential(for: config, policy: .replace, shouldDeleteEmptyCredential: false)
+                    if !config.password.isEmpty {
+                        newlyWrittenCredentialIDs.append(config.id)
+                    }
+                    var stored = config
+                    stored.password = ""
+                    stored.sshKeyBookmark = nil
+                    all.append(stored)
+                    strippedIDs.insert(config.id)
+                }
+            } catch {
+                for id in newlyWrittenCredentialIDs {
+                    if keychain.deletePassword(for: credentialAccount(for: id)) {
+                        unblockCredential(for: id)
+                    } else {
+                        blockCredential(for: id)
+                    }
+                }
+                throw error
             }
             persist(all, preservingLegacyPasswordsFrom: existing, strippingLegacyPasswordFor: strippedIDs)
         }
@@ -348,6 +365,18 @@ final class ServerRepository: @unchecked Sendable {
             id.uuidString
         }
 
+        private func validate(_ config: ServerConfig) throws {
+            guard !config.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ServerRepositoryError.invalidConfiguration("主机不能为空")
+            }
+            guard !config.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ServerRepositoryError.invalidConfiguration("用户名不能为空")
+            }
+            guard (1...65_535).contains(config.port) else {
+                throw ServerRepositoryError.invalidConfiguration("端口必须是 1–65535 之间的整数")
+            }
+        }
+
         private func isCredentialBlocked(_ id: UUID) -> Bool {
             loadBlockedCredentialIDs().contains(id)
         }
@@ -394,11 +423,14 @@ final class ServerRepository: @unchecked Sendable {
 
 enum ServerRepositoryError: LocalizedError {
     case keychainDeleteFailed
+    case invalidConfiguration(String)
 
     var errorDescription: String? {
         switch self {
         case .keychainDeleteFailed:
             return "Keychain 删除失败，请检查应用的沙盒与 Keychain 权限后重试。"
+        case .invalidConfiguration(let message):
+            return "服务器配置无效：\(message)"
         }
     }
 }

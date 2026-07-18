@@ -1,8 +1,8 @@
 # Quay Terms of Use
 
-Effective date: 2026-05-19
+Effective date: 2026-07-18
 
-Quay is provided as a macOS utility for connecting to FTP, FTPS, and SFTP servers that you are authorized to access. You are responsible for the servers, credentials, files, and network activity you use with the app.
+Quay is provided as a macOS utility for connecting to FTP, implicit FTPS, and SFTP servers that you are authorized to access. You are responsible for the servers, credentials, files, and network activity you use with the app.
 
 ## Acceptable Use
 

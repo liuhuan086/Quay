@@ -2,6 +2,7 @@
 // Run: Xcode → Product → Test  (⌘U)
 import XCTest
 import Security
+import Darwin
 @testable import SwiftFTP
 
 // MARK: - Entities Tests
@@ -15,6 +16,12 @@ final class ServerConfigTests: XCTestCase {
     func test_defaultPort_ftp() {
         let c = ServerConfig(displayName: "T", host: "h.com", username: "u", protocol_: .ftp)
         XCTAssertEqual(c.port, 21)
+    }
+
+    func test_defaultPort_ftpsUsesImplicitTLS() {
+        let c = ServerConfig(displayName: "T", host: "h.com", username: "u", protocol_: .ftps)
+        XCTAssertEqual(c.port, 990)
+        XCTAssertEqual(ConnectionProtocol.ftps.displayName, "FTPS（隐式）")
     }
 
     func test_connectionSummary() {
@@ -58,6 +65,15 @@ final class ServerConfigTests: XCTestCase {
         XCTAssertFalse(c.allowSelfSignedTLS)
     }
 
+    func test_legacySSHAlgorithmsDefaultToDisabledAndPersistWhenEnabled() throws {
+        var config = ServerConfig(displayName: "T", host: "h.com", username: "u", protocol_: .sftp)
+        XCTAssertFalse(config.allowLegacySSHAlgorithms)
+        config.allowLegacySSHAlgorithms = true
+
+        let decoded = try JSONDecoder().decode(ServerConfig.self, from: JSONEncoder().encode(config))
+        XCTAssertTrue(decoded.allowLegacySSHAlgorithms)
+    }
+
     func test_sendable_crossActor() async {
         // ServerConfig must be passable across actor boundaries (Sendable)
         let config = ServerConfig(displayName: "T", host: "h", username: "u")
@@ -68,6 +84,16 @@ final class ServerConfigTests: XCTestCase {
 
 // MARK: - TransferTask Tests
 final class TransferTaskTests: XCTestCase {
+
+    func test_statusEqualityIsReflexiveAndComparesAssociatedValues() {
+        let progress = TransferStatus.inProgress(progress: 0.5, bytesPerSecond: 42)
+        let failure = TransferStatus.failed(message: "network")
+
+        XCTAssertEqual(progress, progress)
+        XCTAssertEqual(failure, failure)
+        XCTAssertNotEqual(progress, .inProgress(progress: 0.6, bytesPerSecond: 42))
+        XCTAssertNotEqual(failure, .failed(message: "permission"))
+    }
 
     func test_progressFraction_queued() {
         let t = makeTask()
@@ -120,6 +146,54 @@ final class TransferTaskTests: XCTestCase {
         TransferTask(serverID: UUID(), serverName: "Test", direction: .upload,
                      localURL: URL(fileURLWithPath: "/tmp/test.dat"),
                      remotePath: "/remote/test.dat", fileSize: size)
+    }
+}
+
+final class RemoteFileItemSafetyTests: XCTestCase {
+    func test_safePathComponents() {
+        XCTAssertTrue(RemoteFileItem.isSafePathComponent("报告 2026.txt"))
+        XCTAssertFalse(RemoteFileItem.isSafePathComponent(""))
+        XCTAssertFalse(RemoteFileItem.isSafePathComponent("."))
+        XCTAssertFalse(RemoteFileItem.isSafePathComponent(".."))
+        XCTAssertFalse(RemoteFileItem.isSafePathComponent("../escape"))
+        XCTAssertFalse(RemoteFileItem.isSafePathComponent("nested/file"))
+        XCTAssertFalse(RemoteFileItem.isSafePathComponent("name\r\nDELE /"))
+    }
+}
+
+final class TransferFileStagingTests: XCTestCase {
+    func test_commitAtomicallyReplacesExistingDestination() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftftp-staging-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let destination = directory.appendingPathComponent("download.txt")
+        let staged = TransferFileStaging.downloadURL(for: destination)
+        try Data("old".utf8).write(to: destination)
+        try Data("complete".utf8).write(to: staged)
+
+        try TransferFileStaging.commitDownload(from: staged, to: destination)
+
+        XCTAssertEqual(try Data(contentsOf: destination), Data("complete".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+    }
+
+    func test_discardRemovesOnlyStagedDownload() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftftp-staging-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let destination = directory.appendingPathComponent("download.txt")
+        let staged = TransferFileStaging.downloadURL(for: destination)
+        try Data("original".utf8).write(to: destination)
+        try Data("partial".utf8).write(to: staged)
+
+        TransferFileStaging.discardDownload(for: destination)
+
+        XCTAssertEqual(try Data(contentsOf: destination), Data("original".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
     }
 }
 
@@ -353,6 +427,65 @@ final class TransferEngineExecutionTests: XCTestCase {
         XCTAssertTrue(message.contains("连接池不存在"))
     }
 
+    func test_sameRemoteTargetNeverRunsConcurrently() async throws {
+        let server = makeServer()
+        let firstClient = FakeFTPClient(config: server)
+        let secondClient = FakeFTPClient(config: server)
+        firstClient.setUploadsBlocked(true)
+        secondClient.setUploadsBlocked(true)
+        let factory = FakeClientFactory([firstClient, secondClient])
+        _ = await ConnectionPoolRegistry.shared.pool(
+            for: server,
+            maxSize: 2,
+            clientFactory: factory.makeClient
+        )
+
+        let firstTask = TransferTask(
+            serverID: server.id,
+            serverName: server.displayName,
+            direction: .upload,
+            localURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("same-1.txt"),
+            remotePath: "/same-target.txt",
+            fileSize: 100
+        )
+        let secondTask = TransferTask(
+            serverID: server.id,
+            serverName: server.displayName,
+            direction: .upload,
+            localURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("same-2.txt"),
+            remotePath: "/same-target.txt",
+            fileSize: 100
+        )
+        let engine = TransferEngine(retryDelay: 0.01)
+        await engine.updateConcurrent(2)
+
+        do {
+            await engine.enqueue(firstTask)
+            await engine.enqueue(secondTask)
+            _ = try await waitForTask(firstTask.id, in: engine) { task in
+                if case .inProgress = task.status { return firstClient.uploadCallValues().count == 1 }
+                return false
+            }
+            try await Task.sleep(nanoseconds: 30_000_000)
+
+            XCTAssertEqual(
+                firstClient.uploadCallValues().count + secondClient.uploadCallValues().count,
+                1,
+                "Two writes to the same remote target overlapped"
+            )
+
+            firstClient.setUploadsBlocked(false)
+            _ = try await waitForTask(firstTask.id, in: engine, matching: isCompleted)
+            _ = try await waitForTask(secondTask.id, in: engine, matching: isCompleted)
+            await ConnectionPoolRegistry.shared.removePool(for: server.id)
+        } catch {
+            firstClient.setUploadsBlocked(false)
+            secondClient.setUploadsBlocked(false)
+            await ConnectionPoolRegistry.shared.removePool(for: server.id)
+            throw error
+        }
+    }
+
     private func withRegisteredPool(
         server: ServerConfig,
         client: FakeFTPClient,
@@ -491,6 +624,21 @@ final class KeychainTests: XCTestCase {
     let km = KeychainManager.shared
     let key = "swiftftp.test.\(UUID().uuidString)"
 
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        let probeKey = "swiftftp.test.entitlement-probe.\(UUID().uuidString)"
+        do {
+            try km.savePassword("probe", for: probeKey)
+            km.deletePassword(for: probeKey)
+        } catch {
+            if case KeychainError.saveFailed(let status) = error,
+               status == errSecMissingEntitlement {
+                throw XCTSkip("Keychain integration requires a signed test host with Keychain entitlement")
+            }
+            throw error
+        }
+    }
+
     override func tearDown() {
         km.deletePassword(for: key)
         super.tearDown()
@@ -534,11 +682,13 @@ final class KeychainTests: XCTestCase {
 final class ServerRepositoryTests: XCTestCase {
     var repo: ServerRepository!
     var repoKey: String!
+    private var repoKeychain: MemoryKeychain!
 
     override func setUp() {
         super.setUp()
         repoKey = "swiftftp.tests.servers.\(UUID().uuidString)"
-        repo = ServerRepository(key: repoKey)
+        repoKeychain = MemoryKeychain()
+        repo = ServerRepository(key: repoKey, keychain: repoKeychain)
     }
 
     override func tearDown() async throws {
@@ -548,6 +698,7 @@ final class ServerRepositoryTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: repoKey)
         UserDefaults.standard.removeObject(forKey: "\(repoKey!).blockedCredentialIDs")
         repo = nil
+        repoKeychain = nil
         repoKey = nil
         try await super.tearDown()
     }
@@ -658,15 +809,11 @@ final class ServerRepositoryTests: XCTestCase {
         }]
         """
         UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: repoKey)
-        defer {
-            KeychainManager.shared.deletePassword(for: id.uuidString)
-        }
-
         let fetched = repo.fetchAll()
         XCTAssertEqual(fetched.first?.password, "")
         let resolved = try await repo.password(for: id)
         XCTAssertEqual(resolved, "legacy-secret")
-        XCTAssertEqual(try KeychainManager.shared.getPassword(for: id.uuidString), "legacy-secret")
+        XCTAssertEqual(try repoKeychain.getPassword(for: id.uuidString), "legacy-secret")
 
         let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
             String(data: $0, encoding: .utf8)
@@ -694,11 +841,6 @@ final class ServerRepositoryTests: XCTestCase {
         }]
         """
         UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: repoKey)
-        defer {
-            KeychainManager.shared.deletePassword(for: id1.uuidString)
-            KeychainManager.shared.deletePassword(for: id2.uuidString)
-        }
-
         // On-demand lookup for the first server (before any bulk migration)
         // must not erase the second server's still-unmigrated password.
         let one = try await repo.password(for: id1)
@@ -706,7 +848,7 @@ final class ServerRepositoryTests: XCTestCase {
 
         let two = try await repo.password(for: id2)
         XCTAssertEqual(two, "secret-two")
-        XCTAssertEqual(try KeychainManager.shared.getPassword(for: id2.uuidString), "secret-two")
+        XCTAssertEqual(try repoKeychain.getPassword(for: id2.uuidString), "secret-two")
 
         let persisted = UserDefaults.standard.data(forKey: repoKey).flatMap {
             String(data: $0, encoding: .utf8)
@@ -727,10 +869,6 @@ final class ServerRepositoryTests: XCTestCase {
         }]
         """
         UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: repoKey)
-        defer {
-            KeychainManager.shared.deletePassword(for: legacyID.uuidString)
-        }
-
         try await repo.save(makeCfg("New Server", password: "new-secret"))
 
         let resolved = try await repo.password(for: legacyID)
@@ -749,10 +887,6 @@ final class ServerRepositoryTests: XCTestCase {
         }]
         """
         UserDefaults.standard.set(Data(legacyJSON.utf8), forKey: repoKey)
-        defer {
-            KeychainManager.shared.deletePassword(for: legacyID.uuidString)
-        }
-
         try await repo.deletePassword(for: legacyID)
 
         let resolved = try await repo.password(for: legacyID)
@@ -826,6 +960,33 @@ final class ServerRepositoryTests: XCTestCase {
             passwords.removeValue(forKey: key)
             lock.unlock()
             return true
+        }
+    }
+
+    private final class FailOnSecondSaveKeychain: KeychainStoring, @unchecked Sendable {
+        struct Failure: Error {}
+        private let lock = NSLock()
+        private var saveCount = 0
+        private var passwords: [String: String] = [:]
+
+        func savePassword(_ password: String, for key: String, label: String?) throws {
+            try lock.withLock {
+                saveCount += 1
+                if saveCount == 2 { throw Failure() }
+                passwords[key] = password
+            }
+        }
+
+        func getPassword(for key: String) throws -> String? {
+            lock.withLock { passwords[key] }
+        }
+
+        @discardableResult
+        func deletePassword(for key: String) -> Bool {
+            lock.withLock {
+                passwords.removeValue(forKey: key)
+                return true
+            }
         }
     }
 
@@ -1020,8 +1181,71 @@ final class ServerRepositoryTests: XCTestCase {
         XCTAssertTrue(configs.allSatisfy { savedIDs.contains($0.id) })
     }
 
+    func test_saveRejectsInvalidPortWithoutPersistingAnything() async {
+        let invalid = ServerConfig(
+            displayName: "Invalid",
+            host: "host.local",
+            port: 0,
+            username: "u"
+        )
+
+        await XCTAssertThrowsErrorAsync(try await repo.save(invalid))
+        XCTAssertTrue(repo.fetchAll().isEmpty)
+    }
+
+    func test_importValidatesWholePayloadBeforeWriting() async throws {
+        let valid = makeCfg("Valid")
+        let invalid = ServerConfig(
+            displayName: "Invalid",
+            host: "host.local",
+            port: 0,
+            username: "u"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode([valid, invalid])
+
+        await XCTAssertThrowsErrorAsync(try await repo.importJSON(data))
+        XCTAssertTrue(repo.fetchAll().isEmpty)
+    }
+
+    func test_importRollsBackCredentialsWhenLaterKeychainWriteFails() async throws {
+        let isolatedKey = "swiftftp.tests.import-rollback.\(UUID().uuidString)"
+        let keychain = FailOnSecondSaveKeychain()
+        let repo = ServerRepository(key: isolatedKey, keychain: keychain)
+        defer { UserDefaults.standard.removeObject(forKey: isolatedKey) }
+        let first = makeCfg("First", password: "first-secret")
+        let second = makeCfg("Second", password: "second-secret")
+        let json = """
+        [
+          {"id":"\(first.id.uuidString)","displayName":"First","host":"first.local","username":"u","password":"first-secret"},
+          {"id":"\(second.id.uuidString)","displayName":"Second","host":"second.local","username":"u","password":"second-secret"}
+        ]
+        """
+        let data = Data(json.utf8)
+
+        await XCTAssertThrowsErrorAsync(try await repo.importJSON(data))
+
+        XCTAssertTrue(repo.fetchAll().isEmpty)
+        XCTAssertNil(try keychain.getPassword(for: first.id.uuidString))
+        XCTAssertNil(try keychain.getPassword(for: second.id.uuidString))
+    }
+
     private func makeCfg(_ name: String, password: String = "") -> ServerConfig {
         ServerConfig(displayName: name, host: "test.local", username: "u", password: password)
+    }
+}
+
+private func XCTAssertThrowsErrorAsync<T>(
+    _ expression: @autoclosure () async throws -> T,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected expression to throw", file: file, line: line)
+    } catch {
+        // Expected.
     }
 }
 
@@ -1163,6 +1387,30 @@ final class FTPErrorTests: XCTestCase {
     }
 }
 
+final class NetworkClientValidationTests: XCTestCase {
+    func test_ftpRejectsInvalidPortBeforeOpeningSocket() async {
+        let config = ServerConfig(
+            displayName: "Invalid FTP",
+            host: "127.0.0.1",
+            port: 0,
+            username: "u",
+            protocol_: .ftp
+        )
+        await XCTAssertThrowsErrorAsync(try await FTPClient(config: config).connect(password: ""))
+    }
+
+    func test_sftpRejectsInvalidPortBeforeOpeningSocket() async {
+        let config = ServerConfig(
+            displayName: "Invalid SFTP",
+            host: "127.0.0.1",
+            port: 65_536,
+            username: "u",
+            protocol_: .sftp
+        )
+        await XCTAssertThrowsErrorAsync(try await SFTPClient(config: config).connect(password: ""))
+    }
+}
+
 final class FTPClientParserTests: XCTestCase {
 
     func test_parsePASVExtractsHostAndPort() throws {
@@ -1175,6 +1423,13 @@ final class FTPClientParserTests: XCTestCase {
     func test_parsePASVRejectsMalformedResponses() {
         XCTAssertThrowsError(try FTPClient.parsePASV("227 Passive Mode unavailable"))
         XCTAssertThrowsError(try FTPClient.parsePASV("227 Entering Passive Mode (192,168,1,2,195)"))
+        XCTAssertThrowsError(try FTPClient.parsePASV("227 Entering Passive Mode (192,168,1,999,195,80)"))
+    }
+
+    func test_parseEPSVExtractsAndValidatesPort() throws {
+        XCTAssertEqual(try FTPClient.parseEPSV("229 Entering Extended Passive Mode (|||50000|)"), 50_000)
+        XCTAssertThrowsError(try FTPClient.parseEPSV("229 Entering Extended Passive Mode (|||0|)"))
+        XCTAssertThrowsError(try FTPClient.parseEPSV("229 Entering Extended Passive Mode (||50000|)"))
     }
 
     func test_parseMLSDParsesFactsAndSkipsDotEntries() {
@@ -1183,6 +1438,8 @@ final class FTPClientParserTests: XCTestCase {
         type=file;size=42;modify=20260102030506; report final.txt\r
         type=file;size=1; .\r
         type=file;size=1; ..\r
+        type=file;size=1; ../escape\r
+        type=file;size=1; nested/file\r
         """
 
         let items = FTPClient.parseMLSD(raw, base: "/public")
@@ -1200,6 +1457,7 @@ final class FTPClientParserTests: XCTestCase {
         drwxr-xr-x  2 owner group 4096 Jan 10 12:30 docs\r
         -rw-r--r--  1 owner group 1234 Feb  2  2025 report final.txt\r
         -rw-r--r--  1 owner group 1 Feb  2  2025 .\r
+        -rw-r--r--  1 owner group 1 Feb  2  2025 ../escape\r
         """
 
         let items = FTPClient.parseLIST(raw, base: "/")
@@ -1210,6 +1468,238 @@ final class FTPClientParserTests: XCTestCase {
         XCTAssertTrue(items[0].isDirectory)
         XCTAssertFalse(items[1].isDirectory)
         XCTAssertEqual(items[1].size, 1234)
+    }
+}
+
+final class FTPClientIntegrationTests: XCTestCase {
+    func test_uploadHalfClosesDataConnectionAndHandlesMultilineWelcome() async throws {
+        let server = try LocalFTPServer()
+        server.start()
+        defer { server.stop() }
+
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftftp-upload-\(UUID().uuidString).txt")
+        let payload = Data("complete upload".utf8)
+        try payload.write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let config = ServerConfig(
+            displayName: "Local FTP",
+            host: "127.0.0.1",
+            port: Int(server.port),
+            username: "tester",
+            protocol_: .ftp
+        )
+        let client = FTPClient(config: config)
+
+        try await client.connect(password: "secret")
+        try await client.upload(
+            localURL: localURL,
+            remotePath: "/upload.txt",
+            offset: 0,
+            onProgress: { _ in }
+        )
+        XCTAssertEqual(server.receivedData, payload)
+        await client.disconnect()
+    }
+}
+
+private final class LocalFTPServer: @unchecked Sendable {
+    let port: UInt16
+
+    private let listenerFD: Int32
+    private let queue = DispatchQueue(label: "swiftftp.tests.local-ftp")
+    private let lock = NSLock()
+    private var controlFD: Int32 = -1
+    private var dataListenerFD: Int32 = -1
+    private var uploadedData = Data()
+
+    var receivedData: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return uploadedData
+    }
+
+    init() throws {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw POSIXError(.EIO) }
+        listenerFD = descriptor
+
+        var reuse: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout.size(ofValue: reuse)))
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bindResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindResult == 0, Darwin.listen(descriptor, 1) == 0 else {
+            Darwin.close(descriptor)
+            throw POSIXError(.EADDRINUSE)
+        }
+
+        var boundAddress = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &boundAddress) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(descriptor, $0, &length)
+            }
+        }
+        guard nameResult == 0 else {
+            Darwin.close(descriptor)
+            throw POSIXError(.EIO)
+        }
+        port = UInt16(bigEndian: boundAddress.sin_port)
+    }
+
+    func start() {
+        queue.async { [weak self] in self?.serve() }
+    }
+
+    func stop() {
+        lock.lock()
+        let control = controlFD
+        let dataListener = dataListenerFD
+        controlFD = -1
+        dataListenerFD = -1
+        lock.unlock()
+        if control >= 0 {
+            Darwin.shutdown(control, SHUT_RDWR)
+            Darwin.close(control)
+        }
+        if dataListener >= 0 {
+            Darwin.shutdown(dataListener, SHUT_RDWR)
+            Darwin.close(dataListener)
+        }
+        Darwin.shutdown(listenerFD, SHUT_RDWR)
+        Darwin.close(listenerFD)
+    }
+
+    private func serve() {
+        let control = Darwin.accept(listenerFD, nil, nil)
+        guard control >= 0 else { return }
+        lock.lock()
+        controlFD = control
+        lock.unlock()
+        send("220-Quay local integration server\r\n220 Ready\r\n", to: control)
+
+        while let command = readLine(from: control) {
+            let verb = command.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+            switch verb.uppercased() {
+            case "USER": send("331 Password required\r\n", to: control)
+            case "PASS": send("230 Logged in\r\n", to: control)
+            case "TYPE", "OPTS": send("200 OK\r\n", to: control)
+            case "EPSV":
+                guard let endpoint = makeDataListener() else {
+                    send("425 Cannot open data connection\r\n", to: control)
+                    continue
+                }
+                send("229 Entering Extended Passive Mode (|||\(endpoint)|)\r\n", to: control)
+            case "STOR":
+                send("150 Opening data connection\r\n", to: control)
+                receiveUpload()
+                send("226 Transfer complete\r\n", to: control)
+            case "QUIT":
+                send("221 Goodbye\r\n", to: control)
+                return
+            default:
+                send("502 Unsupported\r\n", to: control)
+            }
+        }
+    }
+
+    private func makeDataListener() -> UInt16? {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return nil }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bindResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindResult == 0, Darwin.listen(descriptor, 1) == 0 else {
+            Darwin.close(descriptor)
+            return nil
+        }
+        var boundAddress = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &boundAddress) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(descriptor, $0, &length)
+            }
+        }
+        guard nameResult == 0 else {
+            Darwin.close(descriptor)
+            return nil
+        }
+        lock.lock()
+        dataListenerFD = descriptor
+        lock.unlock()
+        return UInt16(bigEndian: boundAddress.sin_port)
+    }
+
+    private func receiveUpload() {
+        lock.lock()
+        let listener = dataListenerFD
+        lock.unlock()
+        guard listener >= 0 else { return }
+        let dataFD = Darwin.accept(listener, nil, nil)
+        guard dataFD >= 0 else { return }
+        defer {
+            Darwin.close(dataFD)
+            Darwin.close(listener)
+            lock.lock()
+            if dataListenerFD == listener { dataListenerFD = -1 }
+            lock.unlock()
+        }
+
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = Darwin.read(dataFD, &buffer, buffer.count)
+            if count <= 0 { break }
+            result.append(buffer, count: count)
+        }
+        lock.lock()
+        uploadedData = result
+        lock.unlock()
+    }
+
+    private func readLine(from descriptor: Int32) -> String? {
+        var bytes: [UInt8] = []
+        var byte: UInt8 = 0
+        while Darwin.read(descriptor, &byte, 1) == 1 {
+            bytes.append(byte)
+            if bytes.count >= 2, bytes.suffix(2) == [13, 10] {
+                return String(bytes: bytes.dropLast(2), encoding: .utf8)
+            }
+        }
+        return nil
+    }
+
+    private func send(_ string: String, to descriptor: Int32) {
+        let bytes = Array(string.utf8)
+        bytes.withUnsafeBytes { rawBuffer in
+            var sent = 0
+            while sent < rawBuffer.count {
+                let count = Darwin.write(
+                    descriptor,
+                    rawBuffer.baseAddress!.advanced(by: sent),
+                    rawBuffer.count - sent
+                )
+                guard count > 0 else { return }
+                sent += count
+            }
+        }
     }
 }
 
@@ -1250,6 +1740,20 @@ final class KnownHostsManagerTests: XCTestCase {
             }
             XCTAssertEqual(host, "example.com:22")
         }
+    }
+
+    func test_firstValidationFailsClosedWhenFingerprintCannotBePersisted() throws {
+        let blockingParent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftftp-known-hosts-blocked-\(UUID().uuidString)")
+        try Data("not-a-directory".utf8).write(to: blockingParent)
+        defer { try? FileManager.default.removeItem(at: blockingParent) }
+        let manager = KnownHostsManager(fileURL: blockingParent.appendingPathComponent("known-hosts.json"))
+
+        XCTAssertThrowsError(try manager.validate(
+            fingerprint: "SHA256:first",
+            for: "example.com:22"
+        ))
+        XCTAssertNil(manager.fingerprint(for: "example.com:22"))
     }
 }
 
@@ -1294,6 +1798,8 @@ private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
     private var uploadOutcomes: [FakeTransferOutcome] = []
     private var downloadCalls: [FakeTransferCall] = []
     private var downloadOutcomes: [FakeTransferOutcome] = []
+    private var uploadsBlocked = false
+    private var uploadWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(config: ServerConfig) {
         self.config = config
@@ -1333,6 +1839,17 @@ private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
 
     func enqueueDownloadOutcome(_ outcome: FakeTransferOutcome) {
         locked { downloadOutcomes.append(outcome) }
+    }
+
+    func setUploadsBlocked(_ blocked: Bool) {
+        let waiters = locked { () -> [CheckedContinuation<Void, Never>] in
+            uploadsBlocked = blocked
+            guard !blocked else { return [] }
+            let current = uploadWaiters
+            uploadWaiters.removeAll()
+            return current
+        }
+        waiters.forEach { $0.resume() }
     }
 
     func connect(password: String) async throws {
@@ -1375,6 +1892,16 @@ private final class FakeFTPClient: AnyFTPClient, @unchecked Sendable {
         }
         switch outcome {
         case .succeed:
+            if locked({ uploadsBlocked }) {
+                await withCheckedContinuation { continuation in
+                    let resumeImmediately = locked { () -> Bool in
+                        guard uploadsBlocked else { return true }
+                        uploadWaiters.append(continuation)
+                        return false
+                    }
+                    if resumeImmediately { continuation.resume() }
+                }
+            }
             onProgress(TransferProgress(bytesTransferred: 100, totalBytes: 100, bytesPerSecond: 50))
         case .fail(let error):
             throw error
@@ -1559,6 +2086,36 @@ final class ConnectionPoolTests: XCTestCase {
         XCTAssertEqual(client.disconnectCallCount(), 1)
         let totalCount = await pool.totalCount
         XCTAssertEqual(totalCount, 0)
+    }
+
+    func test_cancelledWaiterDoesNotRequireAClientReturn() async throws {
+        let config = makeConfig()
+        let client = FakeFTPClient(config: config)
+        let pool = ConnectionPool(
+            serverConfig: config,
+            maxSize: 1,
+            clientFactory: FakeClientFactory([client]).makeClient
+        )
+
+        let borrowed = try await pool.borrowClient()
+        let waitingBorrow = Task { try await pool.borrowClient() }
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        waitingBorrow.cancel()
+        do {
+            _ = try await waitingBorrow.value
+            XCTFail("Expected CancellationError")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let activeCountWhileBorrowed = await pool.activeCount
+        XCTAssertEqual(activeCountWhileBorrowed, 1)
+        await pool.returnClient(borrowed)
+        let activeCountAfterReturn = await pool.activeCount
+        XCTAssertEqual(activeCountAfterReturn, 0)
     }
 
     private func makeConfig() -> ServerConfig {

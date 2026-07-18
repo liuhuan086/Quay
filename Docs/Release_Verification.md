@@ -4,13 +4,24 @@ Run this checklist before submitting a Mac App Store build.
 
 ## Build And Signing
 
+First run the unsigned regression suite. Its expected baseline is 103 total,
+97 passed, 6 Keychain integration tests skipped, and 0 failed:
+
 ```bash
 xcodebuild test \
   -project SwiftFTP.xcodeproj \
   -scheme SwiftFTP \
-  -destination 'platform=macOS' \
-  -derivedDataPath /private/tmp/SwiftFTPDerivedData
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath /private/tmp/SwiftFTPDerivedData \
+  CODE_SIGNING_ALLOWED=NO
+```
 
+Then run the same suite from Xcode with an Apple Development signed test host.
+All 103 tests must run; the six direct Keychain tests must not be skipped.
+
+Archive only after both test passes:
+
+```bash
 xcodebuild archive \
   -project SwiftFTP.xcodeproj \
   -scheme SwiftFTP \
@@ -50,7 +61,7 @@ Use product IDs:
    - Starting the trial requires the pre-trial disclosure screen and creates the trial transaction.
    - Trial expiry uses the original StoreKit purchase date; reinstall/restore does not reset it.
    - Expired trial enters the non-bricking locked shell: configuration is viewable/exportable, but connect/upload/download/sync are locked.
-   - `Quay Pro` purchase unlocks core FTP/FTPS/SFTP features immediately.
+   - `Quay Pro` purchase unlocks core FTP/implicit-FTPS/SFTP features immediately.
    - Restore purchases unlocks Pro after deleting/reinstalling the app.
    - User-cancelled purchase returns to the app without unlocking Pro.
    - Pending Ask to Buy purchase shows a waiting state, does not unlock new capabilities, and unlocks only after `Transaction.updates` / `currentEntitlements` delivers a verified transaction.
@@ -72,17 +83,22 @@ For each protocol, create a temporary test server account with a disposable dire
 1. Connect, disconnect, reconnect.
 2. List a directory containing files, folders, hidden files, and non-ASCII names.
 3. Upload a small file, a nested folder, and a file larger than 100 MB.
-4. Download the same files and compare checksums.
+4. Download the same files and compare checksums on both sides; confirm a failed download leaves any pre-existing local destination unchanged.
 5. Pause/resume one upload and one download.
 6. Rename, delete, and create folder.
 7. Confirm the password is still present after app restart and absent from exported JSON.
 
 FTPS-specific:
 
-1. Valid public certificate: connects with `允许不受信任证书` off.
+Quay supports **implicit FTPS on port 990 only**. Do not test or advertise explicit
+`AUTH TLS` as supported. Confirm the server requires private data channels (`PROT P`).
+
+1. Valid public certificate: connects with `允许自签名或过期证书` off.
 2. Self-signed certificate: fails with the toggle off, connects with the toggle on.
 3. Expired certificate: fails with the toggle off, connects with the toggle on.
 4. Hostname mismatch: fails even with the toggle on.
+5. Revoked certificate: fails even with the toggle on.
+6. Capture the server logs or packet metadata and confirm both control and data channels use TLS.
 
 SFTP-specific:
 
@@ -90,6 +106,7 @@ SFTP-specific:
 2. SSH key auth works after selecting the key with the picker.
 3. Restart the app and reconnect with the same SSH key without reselecting it.
 4. Change the server host key and confirm Quay blocks the connection.
+5. Confirm a default connection does not negotiate SHA-1 algorithms; enable the legacy-algorithm toggle only for a disposable legacy server and verify the warning path.
 
 Sandbox file access:
 

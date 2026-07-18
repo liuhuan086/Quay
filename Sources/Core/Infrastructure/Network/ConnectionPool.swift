@@ -10,6 +10,11 @@ private struct PoolEntry {
     var lastUsed: Date
 }
 
+private struct ConnectionWaiter {
+    let id: UUID
+    let continuation: CheckedContinuation<any AnyFTPClient, Error>
+}
+
 typealias ConnectionClientFactory = @Sendable (ServerConfig) -> any AnyFTPClient
 
 // MARK: - ConnectionPool
@@ -25,7 +30,7 @@ actor ConnectionPool {
 
     // MARK: State
     private var entries: [PoolEntry] = []
-    private var waiters: [CheckedContinuation<any AnyFTPClient, Error>] = []
+    private var waiters: [ConnectionWaiter] = []
 
     // MARK: Init
     init(
@@ -50,6 +55,7 @@ actor ConnectionPool {
     /// exceeding `maxSize`, every slot is reserved synchronously (within one actor turn)
     /// before any `await`.
     func borrowClient(password newPassword: String? = nil) async throws -> any AnyFTPClient {
+        try Task.checkCancellation()
         if let newPassword {
             updateCachedPassword(newPassword)
         }
@@ -62,6 +68,10 @@ actor ConnectionPool {
                 let candidate = entries[idx].client
 
                 let alive = await candidate.isConnected
+                if Task.isCancelled {
+                    returnClient(candidate)
+                    throw CancellationError()
+                }
                 if alive {
                     return candidate
                 }
@@ -79,19 +89,38 @@ actor ConnectionPool {
                 entries.append(placeholder)
                 do {
                     try await client.connect(password: password)
-                    return client
                 } catch {
                     if let i = entries.firstIndex(where: { $0.client === (client as AnyObject) }) {
                         entries.remove(at: i)
                     }
                     throw error
                 }
+                if Task.isCancelled {
+                    returnClient(client)
+                    throw CancellationError()
+                }
+                return client
             }
 
             // 3. Pool full — wait for a return.
-            return try await withCheckedThrowingContinuation { cont in
-                waiters.append(cont)
+            let waiterID = UUID()
+            let client: any AnyFTPClient = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation {
+                    (cont: CheckedContinuation<any AnyFTPClient, Error>) in
+                    if Task.isCancelled {
+                        cont.resume(throwing: CancellationError())
+                    } else {
+                        waiters.append(ConnectionWaiter(id: waiterID, continuation: cont))
+                    }
+                }
+            } onCancel: {
+                Task { await self.cancelWaiter(id: waiterID) }
             }
+            if Task.isCancelled {
+                returnClient(client)
+                throw CancellationError()
+            }
+            return client
         }
     }
 
@@ -104,9 +133,9 @@ actor ConnectionPool {
         guard let idx = entries.firstIndex(where: { $0.client === (client as AnyObject) }) else { return }
         if !waiters.isEmpty {
             // Hand directly to next waiter
-            let cont = waiters.removeFirst()
+            let waiter = waiters.removeFirst()
             entries[idx].lastUsed = Date()
-            cont.resume(returning: client)
+            waiter.continuation.resume(returning: client)
         } else {
             entries[idx].inUse    = false
             entries[idx].lastUsed = Date()
@@ -133,10 +162,16 @@ actor ConnectionPool {
         for entry in entries { await entry.client.disconnect() }
         entries.removeAll()
         // Cancel all waiters
-        for cont in waiters {
-            cont.resume(throwing: FTPError.notConnected)
+        for waiter in waiters {
+            waiter.continuation.resume(throwing: FTPError.notConnected)
         }
         waiters.removeAll()
+    }
+
+    private func cancelWaiter(id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        waiter.continuation.resume(throwing: CancellationError())
     }
 
     var activeCount: Int { entries.filter { $0.inUse }.count }

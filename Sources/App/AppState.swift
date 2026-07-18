@@ -275,8 +275,14 @@ final class AppState: ObservableObject {
             return
         }
         do {
+            let previous = servers.first { $0.id == config.id }
             try await repository.update(config, credentialPolicy: .replaceIfNonEmpty)
-            if !config.password.isEmpty {
+            if let previous, connectionSettingsChanged(from: previous, to: config) {
+                await ConnectionPoolRegistry.shared.removePool(for: config.id)
+                if connectionStates[config.id] != nil {
+                    connectionStates[config.id] = .disconnected
+                }
+            } else if !config.password.isEmpty {
                 await ConnectionPoolRegistry.shared.updateCachedPassword(config.password, forServerID: config.id)
             }
             loadServers()
@@ -306,6 +312,15 @@ final class AppState: ObservableObject {
     }
 
     func deleteServer(_ config: ServerConfig) async {
+        let transferIDs = Set(transfers.filter { $0.serverID == config.id }.map(\.id))
+        if !transferIDs.isEmpty {
+            let removedIDs = await engine.remove(ids: transferIDs)
+            let removedTransfers = transfers.filter { removedIDs.contains($0.id) }
+            forgetLocalTransferAccessIfNeeded(for: removedTransfers)
+            transfers.removeAll { removedIDs.contains($0.id) }
+            pruneBatchesAfterTaskRemoval()
+            transferBadgeState.update(from: transfers)
+        }
         await ConnectionPoolRegistry.shared.removePool(for: config.id)
         let credentialCleared = await repository.delete(config.id)
         connectionStates.removeValue(forKey: config.id)
@@ -319,6 +334,18 @@ final class AppState: ObservableObject {
                 message: "已移除该服务器，但保存在 Keychain 中的密码未能清除。Quay 会阻止该残留项被自动复用，你也可以在“钥匙串访问”中手动删除。"
             )
         }
+    }
+
+    private func connectionSettingsChanged(from old: ServerConfig, to new: ServerConfig) -> Bool {
+        old.host != new.host
+            || old.port != new.port
+            || old.username != new.username
+            || old.protocol_ != new.protocol_
+            || old.useSSHKey != new.useSSHKey
+            || old.sshKeyPath != new.sshKeyPath
+            || old.sshKeyBookmark != new.sshKeyBookmark
+            || old.allowLegacySSHAlgorithms != new.allowLegacySSHAlgorithms
+            || old.allowSelfSignedTLS != new.allowSelfSignedTLS
     }
 
     // MARK: - Sync Watchers
@@ -414,13 +441,19 @@ final class AppState: ObservableObject {
             showCoreFeatureLockedAlert()
             return
         }
+        if connectionStates[server.id]?.isConnected == true {
+            selectedServerID = server.id
+            return
+        }
         connectionStates[server.id] = .connecting
         do {
             var connectionConfig = server
             if connectionConfig.password.isEmpty {
                 connectionConfig.password = try await repository.password(for: server.id)
             }
-            let pool = await ConnectionPoolRegistry.shared.pool(for: connectionConfig, maxSize: 5)
+            // One client remains reserved for interactive browsing; the other
+            // eight match TransferEngine's documented concurrency ceiling.
+            let pool = await ConnectionPoolRegistry.shared.pool(for: connectionConfig, maxSize: 9)
             let client = try await pool.borrowClient(password: connectionConfig.password)
             connectionStates[server.id] = .connected(client: client)
             selectedServerID = server.id
@@ -451,6 +484,21 @@ final class AppState: ObservableObject {
         guard canUseCoreFTP else {
             showCoreFeatureLockedAlert()
             return
+        }
+        if isAutoSync {
+            let superseded = transfers.filter {
+                $0.isAutoSync
+                    && $0.serverID == server.id
+                    && $0.direction == direction
+                    && $0.remotePath == remotePath
+                    && $0.status.isUnfinished
+            }
+            if !superseded.isEmpty {
+                let ids = Set(superseded.map(\.id))
+                _ = await engine.remove(ids: ids)
+                forgetLocalTransferAccessIfNeeded(for: superseded)
+                transfers.removeAll { ids.contains($0.id) }
+            }
         }
         let size = fileSize ?? localFileSize(
             for: localURL,
@@ -608,7 +656,7 @@ final class AppState: ObservableObject {
                             self.transferBadgeState.update(from: self.transfers)
                         }
                         if task.status == .cancelled {
-                            self.endLocalTransferAccessIfNeeded(for: task)
+                            self.forgetLocalTransferAccessIfNeeded(for: task)
                         }
                     }
                 },
@@ -617,6 +665,9 @@ final class AppState: ObservableObject {
                         self?.endLocalTransferAccessIfNeeded(for: task)
                         self?.notifications.sendTransferComplete(
                             fileName: task.fileName, direction: task.direction)
+                        if task.isAutoSync {
+                            self?.recordAutoSyncCompletion(task)
+                        }
                         self?.lastCompletedTransferServerID = task.serverID
                     }
                 },
@@ -744,6 +795,9 @@ final class AppState: ObservableObject {
     private func forgetLocalTransferAccessIfNeeded(for task: TransferTask) {
         endLocalTransferAccessIfNeeded(for: task)
         scopedTransferAccessURLsByTaskID.removeValue(forKey: task.id)
+        if task.direction == .download && task.status != .completed {
+            TransferFileStaging.discardDownload(for: task.localURL)
+        }
     }
 
     private func localFileSize(for localURL: URL, securityScopedURL: URL?) -> Int64 {
@@ -755,6 +809,22 @@ final class AppState: ObservableObject {
         }
         let attrs = try? FileManager.default.attributesOfItem(atPath: localURL.path)
         return (attrs?[.size] as? Int64) ?? 0
+    }
+
+    private func recordAutoSyncCompletion(_ task: TransferTask) {
+        let localPath = task.localURL.standardizedFileURL.path
+        let candidates = syncWatchers.values.filter { watcher in
+            guard watcher.serverID == task.serverID else { return false }
+            let root = URL(fileURLWithPath: watcher.localPath, isDirectory: true).standardizedFileURL.path
+            return localPath == root || localPath.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+        }
+        guard let watcher = candidates.max(by: { $0.localPath.count < $1.localPath.count }),
+              var updated = syncWatchers[watcher.id] else { return }
+        updated.lastSyncAt = Date()
+        updated.totalSynced += 1
+        syncWatchers[updated.id] = updated
+        persistSyncWatchers()
+        notifications.sendSyncEvent(fileName: task.fileName, remotePath: task.remotePath)
     }
 }
 

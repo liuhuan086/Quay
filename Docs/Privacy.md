@@ -1,8 +1,8 @@
 # Quay Privacy Policy
 
-Effective date: 2026-05-19
+Effective date: 2026-07-18
 
-Quay is a macOS FTP, FTPS, and SFTP client. The app is designed to keep connection data on your Mac and does not collect analytics, advertising identifiers, or tracking data.
+Quay is a macOS FTP, implicit FTPS, and SFTP client. The app is designed to keep connection data on your Mac and does not collect analytics, advertising identifiers, or tracking data.
 
 ## Data Stored Locally
 

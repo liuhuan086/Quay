@@ -1,86 +1,50 @@
-# SwiftFTP Build
+# Quay (SwiftFTP)
 
-本项目是 macOS App，Xcode scheme 为 `SwiftFTP`。建议把 DerivedData 和 DMG staging 放到 `/tmp`，避免 `Documents` 目录给 `.app`/`.bundle` 自动附加 FinderInfo/FileProvider 扩展属性，导致 `codesign` 报 `resource fork, Finder information, or similar detritus not allowed`。
+Quay 是使用 SwiftUI、Swift 6 严格并发和 Network.framework/Citadel 构建的 macOS 文件传输客户端。Xcode 工程和 scheme 名称仍为 `SwiftFTP`。
 
-## 产品化与上架文档
+## 协议支持
 
-- `Docs/AppStore_Readiness.md`：Mac App Store 上架可行性、付费定价、阻塞问题与整改顺序。
-- `Docs/prompts.md`：后续 AI/工程协作的专业提示词、验收标准和审核检查清单。
+- FTP（默认端口 21，EPSV 优先、PASV 回退）
+- **隐式 FTPS**（默认端口 990，控制与数据通道均使用 TLS）
+- SFTP（默认端口 22，密码或 SSH 私钥）
 
-## 本次产物
+当前不支持显式 FTPS（`AUTH TLS`）和 FTP Active 模式。不要在产品文案中宣称支持这两项。
 
-- App: `/tmp/swiftftp-build/DerivedData/Build/Products/Release/SwiftFTP.app`
-- DMG: `build/SwiftFTP_v2.0.0.dmg`
-- ZIP: `build/SwiftFTP_v2.0.0.zip`
+## 构建与测试
 
-本次构建结果：
+日常开发优先使用 Xcode：
 
-```text
-** BUILD SUCCEEDED **
-SwiftFTP.app: Mach-O universal binary with 2 architectures: x86_64, arm64
-codesign: valid on disk, satisfies its Designated Requirement
-hdiutil verify: checksum of "build/SwiftFTP_v2.0.0.dmg" is VALID
-```
+- 构建：`⌘B`
+- 测试：`⌘U`
+- 静态分析：Product → Analyze
 
-## 编译命令
+无签名命令行验证：
 
 ```bash
-mkdir -p /tmp/swiftftp-build
-
-xcodebuild \
+xcodebuild build \
   -project SwiftFTP.xcodeproj \
   -scheme SwiftFTP \
-  -configuration Release \
-  -derivedDataPath /tmp/swiftftp-build/DerivedData \
-  -clonedSourcePackagesDirPath /tmp/swiftftp-build/SourcePackages \
-  CODE_SIGN_IDENTITY=- \
-  CODE_SIGNING_REQUIRED=NO \
-  ONLY_ACTIVE_ARCH=NO \
-  build
+  -configuration Debug \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath /private/tmp/SwiftFTPDerivedData \
+  CODE_SIGNING_ALLOWED=NO
+
+xcodebuild test \
+  -project SwiftFTP.xcodeproj \
+  -scheme SwiftFTP \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath /private/tmp/SwiftFTPDerivedData \
+  CODE_SIGNING_ALLOWED=NO
 ```
 
-## 校验 App
+2026-07-18 基线：103 tests，97 passed，6 skipped，0 failed。跳过项是必须由带 Keychain entitlement 的签名测试宿主执行的 Keychain 集成测试；仓储与其他业务测试在无签名环境仍完整执行。
 
-```bash
-file /tmp/swiftftp-build/DerivedData/Build/Products/Release/SwiftFTP.app/Contents/MacOS/SwiftFTP
+Release 和 Mac App Store 包必须使用正确的 Apple Distribution/MAS provisioning profile。无签名构建不能验证 Keychain、最终 entitlements 或可提交性。
 
-codesign --verify --deep --strict --verbose=2 \
-  /tmp/swiftftp-build/DerivedData/Build/Products/Release/SwiftFTP.app
-```
+## 发布文档
 
-## 打包 DMG
-
-```bash
-mkdir -p /tmp/swiftftp-dmg-staging
-
-ditto \
-  /tmp/swiftftp-build/DerivedData/Build/Products/Release/SwiftFTP.app \
-  /tmp/swiftftp-dmg-staging/SwiftFTP.app
-
-ln -sfn /Applications /tmp/swiftftp-dmg-staging/Applications
-
-hdiutil create \
-  -volname SwiftFTP \
-  -srcfolder /tmp/swiftftp-dmg-staging \
-  -ov \
-  -format UDZO \
-  build/SwiftFTP_v2.0.0.dmg
-
-hdiutil verify build/SwiftFTP_v2.0.0.dmg
-```
-
-## 打包 ZIP
-
-```bash
-ditto -c -k --keepParent \
-  /tmp/swiftftp-build/DerivedData/Build/Products/Release/SwiftFTP.app \
-  build/SwiftFTP_v2.0.0.zip
-```
-
-## 当前验证备注
-
-- Debug build 已可用 `xcodebuild build ... CODE_SIGNING_ALLOWED=NO` 通过。
-- 单测已可用 `xcodebuild test ... CODE_SIGNING_ALLOWED=NO` 通过，当前 47 tests。
-- 若命令行环境无法写入默认 Xcode 缓存，可加：
-  `-derivedDataPath /private/tmp/SwiftFTPDerivedData -clonedSourcePackagesDirPath /private/tmp/SwiftFTPSourcePackages`
-- Release / App Store 包仍需要配置 `DEVELOPMENT_TEAM`、Distribution 证书和 MAS provisioning profile。
+- `Docs/AppStore_Readiness.md`：当前代码能力、已关闭风险与剩余外部门禁
+- `Docs/Release_Verification.md`：签名、StoreKit、协议和沙盒发布检查
+- `Docs/Monetization_Compliance_Plan.md`：权益和 IAP 约束
+- `Docs/AppStore_Submission_Materials.md`：App Store Connect 交接材料
+- `Docs/prompts.md`：历史整改任务与后续增强提示

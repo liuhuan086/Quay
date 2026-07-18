@@ -101,7 +101,7 @@ try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Err
 ### 为什么需要连接池？
 
 FTP 协议是单通道协议——一个控制连接同时只能执行一个命令。
-并发上传 5 个文件需要 5 个独立的 TCP 控制连接（每个连接 = 一个 FTPClient 实例）。
+FTP 并发传输需要独立的控制连接（每个连接 = 一个 FTPClient 实例）。当前 App 为每个服务器配置 9 个池槽：最多 8 个传输槽，加 1 个交互浏览保留量。
 
 ### 架构设计
 
@@ -313,7 +313,7 @@ Sources/
 │       ├── Network/
 │       │   ├── FTPClient.swift     # FTP/FTPS 实现（class + DispatchQueue）
 │       │   ├── SFTPClient.swift    # SFTP 实现（Citadel）
-│       │   ├── ConnectionPool.swift# 连接池 actor（per-server, max 5 connections）
+│       │   ├── ConnectionPool.swift# 连接池 actor（AppState 配置 9 slots/server）
 │       │   ├── TransferEngine.swift# 传输引擎 actor（队列/并发/重试/恢复）
 │       │   └── ClientFactory.swift # 工厂方法（根据协议创建 client）
 │       ├── FileSystem/

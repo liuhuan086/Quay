@@ -18,6 +18,7 @@ struct ServerEditView: View {
     @State private var useSSHKey: Bool
     @State private var sshKeyPath: String
     @State private var sshKeyBookmark: Data?
+    @State private var allowLegacySSHAlgorithms: Bool
     @State private var allowSelfSignedTLS: Bool
 
     @State private var activeTab = 0
@@ -48,11 +49,21 @@ struct ServerEditView: View {
         _useSSHKey   = State(initialValue: config?.useSSHKey ?? false)
         _sshKeyPath  = State(initialValue: config?.sshKeyPath ?? "")
         _sshKeyBookmark = State(initialValue: config?.sshKeyBookmark)
+        _allowLegacySSHAlgorithms = State(initialValue: config?.allowLegacySSHAlgorithms ?? false)
         _allowSelfSignedTLS = State(initialValue: config?.allowSelfSignedTLS ?? false)
     }
 
     var isEditing: Bool { existingConfig != nil }
-    var isValid: Bool { !host.trimmingCharacters(in: .whitespaces).isEmpty && !username.isEmpty }
+    var validatedPort: Int? {
+        guard let value = Int(port), (1...65_535).contains(value) else { return nil }
+        return value
+    }
+
+    var isValid: Bool {
+        !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && validatedPort != nil
+    }
 
     /// Check for duplicate displayName or host within the same group
     var duplicateMessage: String? {
@@ -161,7 +172,7 @@ struct ServerEditView: View {
             }
             Picker("", selection: $protocol_) {
                 ForEach(ConnectionProtocol.allCases) { p in
-                    Label(p.rawValue, systemImage: p.sfSymbol).tag(p)
+                    Label(p.displayName, systemImage: p.sfSymbol).tag(p)
                 }
             }
             .pickerStyle(.segmented)
@@ -179,6 +190,12 @@ struct ServerEditView: View {
             formRow("端口", width: 80) {
                 TextField("端口", text: $port).textFieldStyle(.roundedBorder)
             }
+        }
+        if !port.isEmpty && validatedPort == nil {
+            Text("端口必须是 1–65535 之间的整数")
+                .font(.caption2)
+                .foregroundColor(.red)
+                .padding(.leading, 82)
         }
 
         // Username
@@ -256,8 +273,15 @@ struct ServerEditView: View {
             }
         }
         if protocol_ == .ftps {
-            Toggle("允许不受信任证书（FTPS）", isOn: $allowSelfSignedTLS)
-                .help("仅在连接自签名或内部测试服务器时开启。开启后无法防御证书伪造风险。")
+            Text("当前支持隐式 FTPS（通常使用 990 端口），控制与数据通道均使用 TLS。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Toggle("允许自签名或过期证书（FTPS）", isOn: $allowSelfSignedTLS)
+                .help("仅在连接自签名或内部测试服务器时开启；域名不匹配和已吊销证书仍会被拒绝。")
+        }
+        if protocol_ == .sftp {
+            Toggle("允许旧式 SSH 算法", isOn: $allowLegacySSHAlgorithms)
+                .help("仅为不支持现代算法的旧服务器开启；会允许 SHA-1 密钥交换和旧式 RSA 签名。")
         }
     }
 
@@ -298,18 +322,22 @@ struct ServerEditView: View {
 
     // MARK: - Actions
     private func save() {
-        let name = displayName.isEmpty ? host : displayName
+        let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = normalizedDisplayName.isEmpty ? normalizedHost : normalizedDisplayName
         let cfg = ServerConfig(
             id: existingConfig?.id ?? UUID(),
-            displayName: name, host: host,
-            port: Int(port) ?? protocol_.defaultPort,
-            username: username, protocol_: protocol_,
+            displayName: name, host: normalizedHost,
+            port: validatedPort ?? protocol_.defaultPort,
+            username: normalizedUsername, protocol_: protocol_,
             initialPath: initialPath.isEmpty ? "/" : initialPath,
             groupName: groupName.isEmpty ? nil : groupName,
             colorLabel: colorLabel, notes: notes,
             useSSHKey: useSSHKey,
             sshKeyPath: sshKeyPath.isEmpty ? nil : sshKeyPath,
             sshKeyBookmark: validSSHKeyBookmark(),
+            allowLegacySSHAlgorithms: allowLegacySSHAlgorithms,
             allowSelfSignedTLS: allowSelfSignedTLS,
             password: password,
             createdAt: existingConfig?.createdAt ?? Date(),
@@ -321,12 +349,17 @@ struct ServerEditView: View {
 
     private func testConnection() {
         testState = .testing
-        let portInt = Int(port) ?? protocol_.defaultPort
+        guard let portInt = validatedPort else {
+            testState = .fail("端口必须是 1–65535 之间的整数")
+            return
+        }
+        let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let cfg = ServerConfig(
-            displayName: host,
-            host: host,
+            displayName: normalizedHost,
+            host: normalizedHost,
             port: portInt,
-            username: username,
+            username: normalizedUsername,
             protocol_: protocol_,
             initialPath: initialPath.isEmpty ? "/" : initialPath,
             groupName: groupName.isEmpty ? nil : groupName,
@@ -335,6 +368,7 @@ struct ServerEditView: View {
             useSSHKey: useSSHKey,
             sshKeyPath: sshKeyPath.isEmpty ? nil : sshKeyPath,
             sshKeyBookmark: validSSHKeyBookmark(),
+            allowLegacySSHAlgorithms: allowLegacySSHAlgorithms,
             allowSelfSignedTLS: allowSelfSignedTLS,
             password: password
         )

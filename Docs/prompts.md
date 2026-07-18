@@ -9,7 +9,7 @@
 ## 使用方式
 
 ```
-1. 在 Claude Code 里 cd 到项目根 /Users/huan/Documents/swiftFTP
+1. 在开发工具里进入当前仓库根目录（不要依赖某台机器的绝对路径）
 2. 按本文件顺序复制下面的 ⌘ Prompt 到对话框
 3. 每完成一条，本地 git commit；commit 完跑 ⌘U 单测
 4. Phase 1 剩余项完成后做 Release 签名包、沙盒文件访问、StoreKit Sandbox 的最终验证
@@ -34,35 +34,27 @@
 
 ## P1-02 SFTP TOFU 主机密钥校验
 
-> 状态（2026-05-09）：✅ 基础 TOFU 已接入。`SFTPClient` 使用 `TOFUHostKeyValidator`，`KnownHostsManager` 会保存并校验 SHA-256 指纹；不一致会抛 `FTPError.hostKeyMismatch`。剩余增强是给用户一个“确认信任新指纹并重连”的 UI 流程。
+> 状态（2026-07-18）：✅ TOFU 已接入并改为 fail-closed。首次指纹只有原子持久化成功后才接受；并发访问受锁保护；不一致会抛 `FTPError.hostKeyMismatch`。
 
 ```
-请：
-1. 在 hostKeyMismatch 被抛出时，AppState.connect 捕获并展示
-   一个"主机密钥变更，是否信任新密钥？"的确认弹窗（NSAlert 也行）
-   - 用户确认后调用 KnownHostsManager.store(fingerprint:for:) 更新指纹再重连
-   - 拒绝则保持失败
-2. 补 UI/集成测试：首次连接、一致指纹、不一致指纹、用户确认更新四条路径
-3. 用真实 openssh-server 验证 known_hosts 文件在沙盒容器内可读写
+后续 UX 增强（不降低默认安全性）：
+1. 为显式“重置信任”流程设计 UI，并同时展示旧/新 SHA-256 指纹；不要在普通错误弹窗里一键静默覆盖。
+2. 重置动作应只删除指定 `host:port` 的记录，要求二次确认并记录清晰的风险说明。
+3. 补集成测试：首次连接、一致指纹、持久化失败、不一致指纹、用户显式重置五条路径。
+4. 用真实 openssh-server 验证 known_hosts 文件在沙盒容器内可读写。
 ```
 
 ---
 
 ## P1-03 FTPS 严格 TLS（默认严格 + 高级开关）
 
-> 状态（2026-05-09）：🟡 部分完成。`allowSelfSignedTLS` 字段和 UI 开关已存在，默认路径不设置 verify block，走系统 TLS 校验；剩余问题是用户开启例外后目前会全部放行，MAS 前建议收窄为只放行自签/过期，不放行域名不匹配。
+> 状态（2026-07-18）：✅ 代码整改完成。产品仅支持隐式 FTPS（默认 990）；控制与数据通道均使用 TLS，并要求 `PBSZ 0` / `PROT P`。默认走系统校验；例外开关只允许自签/过期/未生效/未知 CA，不放行 hostname mismatch、revoked 或撤销检查失败。
 
 ```
-需要：
-
-1. 当用户勾选 `allowSelfSignedTLS` 时，用 SecTrustEvaluateWithError 显式调用，遇错也只放行
-   "证书过期 / 自签名" 这两类，不放行域名不匹配
-2. 保持默认路径不设置 verify block，让系统走标准链校验
-3. 切换该字段时，继续确保 testConnection() 立即生效
-4. 增加手动测试：有效证书、自签证书、过期证书、域名不匹配证书四类
-
-注意：Network.framework 的 sec_protocol_options 是 nw_protocol_options 衍生，
-不能简单 complete(true) 后再回到默认；改成只在用户允许时才设置 verify block。
+剩余真实服务器验证：
+1. 有效证书、自签、过期、未生效、域名不匹配、吊销证书六类。
+2. 确认数据连接也使用 TLS，服务端拒绝 `PROT C`。
+3. 确认 UI 和商店文案只写“隐式 FTPS”，不宣称支持显式 `AUTH TLS`。
 ```
 
 ---

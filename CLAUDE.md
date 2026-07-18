@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SwiftFTP v2 is a macOS FTP/FTPS/SFTP client built with SwiftUI + Swift 6 strict concurrency. It targets macOS and uses `Network.framework` for FTP/FTPS and Citadel via SwiftPM for SFTP.
+SwiftFTP v2 is a macOS FTP/implicit-FTPS/SFTP client built with SwiftUI + Swift 6 strict concurrency. It targets macOS and uses `Network.framework` for FTP/FTPS and Citadel via SwiftPM for SFTP. FTPS is implicit TLS on port 990; explicit `AUTH TLS` is not implemented.
 
 ## Productization Guidance
 
@@ -45,7 +45,7 @@ Sources/
 │       │   ├── FTPClient.swift         — FTP/FTPS (class + DispatchQueue, not actor)
 │       │   ├── SFTPClient.swift        — SFTP via Citadel
 │       │   ├── ClientFactory.swift     — Creates correct client for a ServerConfig
-│       │   ├── ConnectionPool.swift    — actor: per-server pool (max 5), borrow/return pattern
+│       │   ├── ConnectionPool.swift    — actor: per-server pool; app uses 9 slots (8 transfers + 1 interactive)
 │       │   └── TransferEngine.swift    — actor: transfer queue, concurrency, pause/resume/retry
 │       ├── FileSystem/FSEventWatcher.swift  — FSEvents + debounce for realtime sync
 │       └── Security/KeychainManager.swift  — macOS Keychain, Sendable singleton

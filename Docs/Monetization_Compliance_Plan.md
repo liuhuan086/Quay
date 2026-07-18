@@ -1,9 +1,10 @@
-# Quay — 变现与上架合规整改方案（最终版）
+# Quay — 变现与上架合规决策稿
 
 **文档性质**：可执行整改方案 / AI 与人共用的工作依据
 **适用范围**：Mac App Store（MAS）首发版本的变现模型、IAP 合规、权益与门控
-**结论定调**：MAS 免费下载 + Tier 0 `7-Day Trial` Non-Consumable + 付费 `Quay Pro` Non-Consumable（解锁首发本地 FTP/FTPS/SFTP 核心功能）；过期态为「数据可访问、核心功能锁定」，**不是全屏变砖**。
+**结论定调**：MAS 免费下载 + Tier 0 `7-Day Trial` Non-Consumable + 付费 `Quay Pro` Non-Consumable（解锁首发本地 FTP/隐式 FTPS/SFTP 核心功能）；过期态为「数据可访问、核心功能锁定」，**不是全屏变砖**。
 **关联文档**：`Docs/AppStore_Readiness.md`（总体上架阻断项）、`Docs/Release_Verification.md`（提交前验证清单，本方案新增项需并入）。
+**规则基准**：[Apple App Review Guidelines 3.1.1](https://developer.apple.com/app-store/review/guidelines/)；提交当天必须再次复核。
 
 ---
 
@@ -17,16 +18,16 @@
 - **禁止**「擅自修复」已登记的既定风险（见 §6 Accepted Risks），尤其是本地时钟回拨延长试用——这是已知并接受的取舍，不要为它加服务器校验或复杂逻辑。
 - **禁止**用重复弹窗/模态骚扰催付。允许的仅限：①一个常驻、非模态的「试用剩余 X 天」可视提示；②到期前**最多一次**温和提醒；③到期锁定那一刻。除此之外不得有任何重复模态。详见 §2.1。这同时是 App Review（4.x dark pattern / 3.1.1）与评分风险。
 - 能力判断一律走**统一的权益解析出口**（见 §3），不得在各 View 里散落 `isPro` / 日期比较。
-- 不要把付费商品对外命名为笼统的 `Full Unlock`，否则未来 `cloud` 二档会被用户合理理解为「已经买过也应包含」。首发付费商品建议显示为 `Quay Pro` / `Quay Pro（本地功能）`，文案说明它解锁当前 FTP/FTPS/SFTP 本地客户端能力。
+- 不要把付费商品对外命名为笼统的 `Full Unlock`，否则未来 `cloud` 二档会被用户合理理解为「已经买过也应包含」。首发付费商品建议显示为 `Quay Pro` / `Quay Pro（本地功能）`，文案说明它解锁当前 FTP/隐式 FTPS/SFTP 本地客户端能力。
 - 改动 IAP/门控前先读本文件与 `Docs/AppStore_Readiness.md`。
 
 ---
 
 ## 1. 结论与边界（合规 ≠ 转化）
 
-- **Trial IAP 只解决合规**：它把 App Review 3.1.1 风险从「高」降到「低」。它**不**自动解决转化率、评分、获客、长期收入。
+- **Trial IAP 只解决合规路径**：它符合 App Review 3.1.1 对非订阅 app 时间试用的公开机制，但不构成审核保证，也**不**自动解决转化率、评分、获客或长期收入。
 - **选择方案 A 的真实理由**（精确版）：不是 freemium 商业上必劣，而是 Quay 当前阶段（单人、时间有限）若走 freemium，需要维护一条脆弱的「读免费 / 写付费」功能边界（大量边界测试、文案解释、UI 分支、用户抱怨）。Trial IAP 的优势是**少维护这条边界**，且不把核心价值免费送出。
-- **必须接受方案 A 的营销代价**：第 8 天锁功能即便合规，也天然制造一批低星评价，国区尤甚。非变砖过期态只能减伤，不能消除。缓冲手段写入 §5。
+- **必须评估方案 A 的体验代价**：第 8 天锁定核心功能可能带来挫败感和负面评价；非变砖过期态只能缓解，不能消除。缓冲手段写入 §5，真实影响应以发布后的数据与反馈判断。
 
 ---
 
@@ -36,8 +37,8 @@
 |----|------|
 | 分发 | MAS 免费下载 |
 | 试用 | 7 天完整试用，经 Apple Tier 0 Non-Consumable IAP 发放 |
-| 解锁 | 一次性买断 `Quay Pro`，无订阅；解锁首发本地 FTP/FTPS/SFTP 客户端核心功能 |
-| 首发定价 | 限时低价（¥18–25 或 $2.99），3 个月后回调 $4.99 / ¥38。目标是早期评论速度与 ASC 排名飞轮，不是首月利润 |
+| 解锁 | 一次性买断 `Quay Pro`，无订阅；解锁首发本地 FTP/隐式 FTPS/SFTP 客户端核心功能 |
+| 首发定价 | 提交前按目标 storefront、竞品当期价格和用户访谈重新决策；代码与截图不得写死金额，界面只使用 StoreKit `displayPrice` |
 | 文案纪律 | 商店页与截图明确「7 天完整试用 / 一次买断 / 无订阅」；避免误导性「免费」暗示 |
 | 催付纪律 | 仅在功能撞墙处出现一次升级入口，无弹窗轰炸 |
 | 未来杠杆 | 云存储（S3/OSS/COS）、云同步、团队能力作为**第二付费档**，不并入首发 `Quay Pro`（见 §3 二档预留） |
@@ -254,4 +255,4 @@ struct Entitlements: Sendable {
 
 ## 9. 审核提交备注（Review Notes 模板）
 
-> Quay 采用 App Review Guideline 3.1.1 指定的 Tier 0 Non-Consumable 试用路径。`com.swiftftp.app.trial7` 为 Price Tier 0 免费试用券（7 天，Display Name: `7-Day Trial`），`com.swiftftp.app.pro` 为一次性 `Quay Pro` 解锁，覆盖首发本地 FTP/FTPS/SFTP 客户端核心功能。试用前界面已明确披露试用时长、到期锁定的功能、后续一次性费用。试用到期后 App 不变砖：用户仍可查看与导出（非敏感）服务器配置、删除数据、购买与恢复。若审核账号此前已领取过该 Tier 0 试用券，将直接进入锁定态——这是 Non-Consumable「每 Apple ID 一次」的预期行为；锁定态本身可完整审核购买/恢复路径。如需体验首次试用态，可使用未消耗过 trial 的干净 Sandbox 账号。
+> Quay 采用 App Review Guideline 3.1.1 指定的 Tier 0 Non-Consumable 试用路径。`com.swiftftp.app.trial7` 为 Price Tier 0 免费试用券（7 天，Display Name: `7-Day Trial`），`com.swiftftp.app.pro` 为一次性 `Quay Pro` 解锁，覆盖首发本地 FTP/隐式 FTPS/SFTP 客户端核心功能。试用前界面已明确披露试用时长、到期锁定的功能、后续一次性费用。试用到期后 App 不变砖：用户仍可查看与导出（非敏感）服务器配置、删除数据、购买与恢复。若审核账号此前已领取过该 Tier 0 试用券，将直接进入锁定态——这是 Non-Consumable「每 Apple ID 一次」的预期行为；锁定态本身可完整审核购买/恢复路径。如需体验首次试用态，可使用未消耗过 trial 的干净 Sandbox 账号。
