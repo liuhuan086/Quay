@@ -1,0 +1,111 @@
+name: SwiftFTP
+options:
+  bundleIdPrefix: com.swiftftp
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "26.5"
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "3"
+
+packages:
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel.git
+    from: "0.7.0"
+
+targets:
+  SwiftFTP:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+        excludes:
+          - "**/.DS_Store"
+    resources:
+      - path: Sources/Resources/Assets.xcassets
+      - path: Sources/Resources/Acknowledgements.json
+    dependencies:
+      - package: Citadel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.swiftftp.app
+        INFOPLIST_FILE: Sources/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/Resources/SwiftFTP.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: false
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: "YES"
+        DEVELOPMENT_TEAM: "UW4Z5U4U66"
+        COMBINE_HIDPI_IMAGES: "YES"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+        SWIFT_STRICT_CONCURRENCY: complete
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "Apple Development"
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG"
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          SWIFT_COMPILATION_MODE: wholemodule
+    info:
+      path: Sources/Resources/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIconName: AppIcon
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: Quay
+        CFBundleDisplayName: Quay
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHumanReadableCopyright: Copyright 2024-2026. All rights reserved.
+        LSApplicationCategoryType: public.app-category.utilities
+    entitlements:
+      path: Sources/Resources/SwiftFTP.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.files.bookmarks.app-scope: true
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.swiftftp.app
+
+  SwiftFTPTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: SwiftFTP
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.swiftftp.tests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SwiftFTP.app/Contents/MacOS/SwiftFTP"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  SwiftFTP:
+    build:
+      targets:
+        SwiftFTP: all
+        SwiftFTPTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - SwiftFTPTests
+    archive:
+      config: Release

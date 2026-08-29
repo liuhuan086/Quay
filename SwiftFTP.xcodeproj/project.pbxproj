@@ -1,0 +1,707 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		10F71BE7E3FE72E154324F11 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABE4B5AEF091F7BCF044963 /* AboutView.swift */; };
+		125535ACC4F5F913A1EBE3A7 /* Acknowledgements.json in Resources */ = {isa = PBXBuildFile; fileRef = 693804ACA03CA6E1E91D3310 /* Acknowledgements.json */; };
+		167C312C829CB1BA7DAA49D4 /* ServerRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 964E034C434731E277145B32 /* ServerRepository.swift */; };
+		16E3C79C12BEC0717BC5B65B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F4DE2072153E3DC1397F9F14 /* Assets.xcassets */; };
+		174C5E03E7335F13AB744E99 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9D78A54E0896A666C9D0C9 /* TransferQueueView.swift */; };
+		45AC706C3A65520379ECC4F2 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63D4DA4123D4A2662BA85C69 /* Entities.swift */; };
+		4EDF22ACA8476CC0A4CFADFE /* ClientFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29E43F90769F7BAC703B56B /* ClientFactory.swift */; };
+		605AA6AE2B02B6EC9EB52D1A /* AnyFTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F15BB0E1958D46266904C36 /* AnyFTPClient.swift */; };
+		65C4D7543FBA858446216EAA /* SwiftFTPv2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EDF0092FD9616B870C7463 /* SwiftFTPv2Tests.swift */; };
+		75FDAF5CEC56804627572EF6 /* ServerEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5410A57AB011264AE4406E /* ServerEditView.swift */; };
+		7AF829FC955B2C1D0718DA23 /* RealtimeSyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 710E5C903F3EFB834BCBEEE8 /* RealtimeSyncView.swift */; };
+		960A1E764193116F83279635 /* FileBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E1F668E57E72FB0227A85C /* FileBrowserView.swift */; };
+		AB785DD3E7698AE12FE6943C /* SFTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F229EE36AF0B986EFB9636E /* SFTPClient.swift */; };
+		ABDC1F2C5FF2CDA13128DE24 /* TransferEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C85ED3AFD83CE107BA714A41 /* TransferEngine.swift */; };
+		B01C535578933831E603BABF /* FSEventWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E953E9D9969337FF23CE45ED /* FSEventWatcher.swift */; };
+		B5B85D96DCFF7E193A729D31 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 43ED60EBAC288BC90350F5CA /* Citadel */; };
+		C4BC270E374E1F76E59F20B8 /* AppLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = E392E562D7738A45EBAA7ECF /* AppLinks.swift */; };
+		CA8048F41FEF4734219C9F8D /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471E9A5EC9EC8DE7F9C9F679 /* KeychainManager.swift */; };
+		D1F40F70CB1071A458976B19 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8037113FD5B2EB379A049D16 /* OnboardingView.swift */; };
+		E2FA745B60A9E95556E1ECCB /* MainViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FEF6F3A041ABE75C83C4BA1 /* MainViews.swift */; };
+		E58BAC579E42958C33B58DA4 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99518BAE51DDFE436D991FCB /* AppState.swift */; };
+		E840076FB9823DEC99B7875A /* ConnectionPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CBFFF1BEBC6557CEE7F6C63 /* ConnectionPool.swift */; };
+		F6C917493A51FBE761B2FC0E /* FTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FE2FCE36D5956FEC0F209D3 /* FTPClient.swift */; };
+		FF3E18B97A2AE1A525C07CAD /* FileViewModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F813F560F8A68FD79AB623E2 /* FileViewModels.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5060395F086CD975A9892D9D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8A0173BFCF9045FE6531ABFA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7BD9FFFB553C76A5CE07C2A3;
+			remoteInfo = SwiftFTP;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		2ABE4B5AEF091F7BCF044963 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
+		2CBFFF1BEBC6557CEE7F6C63 /* ConnectionPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionPool.swift; sourceTree = "<group>"; };
+		2E9D78A54E0896A666C9D0C9 /* TransferQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueView.swift; sourceTree = "<group>"; };
+		2F15BB0E1958D46266904C36 /* AnyFTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnyFTPClient.swift; sourceTree = "<group>"; };
+		471E9A5EC9EC8DE7F9C9F679 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
+		4FEF6F3A041ABE75C83C4BA1 /* MainViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViews.swift; sourceTree = "<group>"; };
+		57E1F668E57E72FB0227A85C /* FileBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserView.swift; sourceTree = "<group>"; };
+		5FE2FCE36D5956FEC0F209D3 /* FTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FTPClient.swift; sourceTree = "<group>"; };
+		63D4DA4123D4A2662BA85C69 /* Entities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entities.swift; sourceTree = "<group>"; };
+		693804ACA03CA6E1E91D3310 /* Acknowledgements.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Acknowledgements.json; sourceTree = "<group>"; };
+		6BBD2D82A3184839D58E2778 /* SwiftFTP.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SwiftFTP.entitlements; sourceTree = "<group>"; };
+		710E5C903F3EFB834BCBEEE8 /* RealtimeSyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealtimeSyncView.swift; sourceTree = "<group>"; };
+		8037113FD5B2EB379A049D16 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		8F229EE36AF0B986EFB9636E /* SFTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SFTPClient.swift; sourceTree = "<group>"; };
+		964E034C434731E277145B32 /* ServerRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRepository.swift; sourceTree = "<group>"; };
+		99518BAE51DDFE436D991FCB /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		C85ED3AFD83CE107BA714A41 /* TransferEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferEngine.swift; sourceTree = "<group>"; };
+		CE5410A57AB011264AE4406E /* ServerEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerEditView.swift; sourceTree = "<group>"; };
+		D29E43F90769F7BAC703B56B /* ClientFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientFactory.swift; sourceTree = "<group>"; };
+		E1EDF0092FD9616B870C7463 /* SwiftFTPv2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftFTPv2Tests.swift; sourceTree = "<group>"; };
+		E392E562D7738A45EBAA7ECF /* AppLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLinks.swift; sourceTree = "<group>"; };
+		E8F44F44DEBE209B09F32CA5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		E953E9D9969337FF23CE45ED /* FSEventWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FSEventWatcher.swift; sourceTree = "<group>"; };
+		F4DE2072153E3DC1397F9F14 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F5AE3AD952870A72D8540E56 /* SwiftFTP.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwiftFTP.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F813F560F8A68FD79AB623E2 /* FileViewModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewModels.swift; sourceTree = "<group>"; };
+		FCBF5A99DCAE2C169BEA8DCA /* SwiftFTPTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SwiftFTPTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4FADA66AB6E7605018326660 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B5B85D96DCFF7E193A729D31 /* Citadel in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		135917E50474CDB253171350 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				4FEF6F3A041ABE75C83C4BA1 /* MainViews.swift */,
+				738858887D2D33AA5430EE68 /* About */,
+				50DC0FC6111F60778EE0BB98 /* ConnectionManager */,
+				7382664B6D5530A6671D1250 /* FileBrowser */,
+				95E21349401269A6C357627C /* Onboarding */,
+				32BF766633F49FA1B2495B25 /* RealtimeSync */,
+				5604A24404DF965E1B6D9506 /* TransferQueue */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		199348A4E62B54AA497BBD8D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F5AE3AD952870A72D8540E56 /* SwiftFTP.app */,
+				FCBF5A99DCAE2C169BEA8DCA /* SwiftFTPTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		23B45C4B1086CEEE6C14B145 /* Repositories */ = {
+			isa = PBXGroup;
+			children = (
+				2F15BB0E1958D46266904C36 /* AnyFTPClient.swift */,
+			);
+			path = Repositories;
+			sourceTree = "<group>";
+		};
+		2B3FA51E0EB3DA8A914FB9B4 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				57E1F668E57E72FB0227A85C /* FileBrowserView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		32BF766633F49FA1B2495B25 /* RealtimeSync */ = {
+			isa = PBXGroup;
+			children = (
+				710E5C903F3EFB834BCBEEE8 /* RealtimeSyncView.swift */,
+			);
+			path = RealtimeSync;
+			sourceTree = "<group>";
+		};
+		3C6C285217A76779392CA925 /* Security */ = {
+			isa = PBXGroup;
+			children = (
+				471E9A5EC9EC8DE7F9C9F679 /* KeychainManager.swift */,
+			);
+			path = Security;
+			sourceTree = "<group>";
+		};
+		426D966559888BE02ABDFF9D /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				CE5410A57AB011264AE4406E /* ServerEditView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		50DC0FC6111F60778EE0BB98 /* ConnectionManager */ = {
+			isa = PBXGroup;
+			children = (
+				426D966559888BE02ABDFF9D /* Views */,
+			);
+			path = ConnectionManager;
+			sourceTree = "<group>";
+		};
+		5604A24404DF965E1B6D9506 /* TransferQueue */ = {
+			isa = PBXGroup;
+			children = (
+				2E9D78A54E0896A666C9D0C9 /* TransferQueueView.swift */,
+			);
+			path = TransferQueue;
+			sourceTree = "<group>";
+		};
+		5DA096C0F16BAD7D5EB3926D = {
+			isa = PBXGroup;
+			children = (
+				BC082AE01D29FA85B33D74F0 /* Sources */,
+				6DB6D3CD46C3BCD0D4241640 /* Tests */,
+				199348A4E62B54AA497BBD8D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5E9F5060E04107984D8ABCF0 /* FileSystem */ = {
+			isa = PBXGroup;
+			children = (
+				E953E9D9969337FF23CE45ED /* FSEventWatcher.swift */,
+			);
+			path = FileSystem;
+			sourceTree = "<group>";
+		};
+		62A250E996E1B73F608A7648 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				693804ACA03CA6E1E91D3310 /* Acknowledgements.json */,
+				F4DE2072153E3DC1397F9F14 /* Assets.xcassets */,
+				E8F44F44DEBE209B09F32CA5 /* Info.plist */,
+				6BBD2D82A3184839D58E2778 /* SwiftFTP.entitlements */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		63FF06C85277675C3140DD25 /* Data */ = {
+			isa = PBXGroup;
+			children = (
+				964E034C434731E277145B32 /* ServerRepository.swift */,
+			);
+			path = Data;
+			sourceTree = "<group>";
+		};
+		6DB6D3CD46C3BCD0D4241640 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				E1EDF0092FD9616B870C7463 /* SwiftFTPv2Tests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		7382664B6D5530A6671D1250 /* FileBrowser */ = {
+			isa = PBXGroup;
+			children = (
+				8201A50D50E52749C64ED12F /* ViewModels */,
+				2B3FA51E0EB3DA8A914FB9B4 /* Views */,
+			);
+			path = FileBrowser;
+			sourceTree = "<group>";
+		};
+		738858887D2D33AA5430EE68 /* About */ = {
+			isa = PBXGroup;
+			children = (
+				2ABE4B5AEF091F7BCF044963 /* AboutView.swift */,
+			);
+			path = About;
+			sourceTree = "<group>";
+		};
+		7A2FD60529A89053ECC6C9B6 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				63FF06C85277675C3140DD25 /* Data */,
+				EB460997489008E23DB9BC74 /* Domain */,
+				7C73C1F310ED44AD5A6E5A44 /* Infrastructure */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		7C73C1F310ED44AD5A6E5A44 /* Infrastructure */ = {
+			isa = PBXGroup;
+			children = (
+				5E9F5060E04107984D8ABCF0 /* FileSystem */,
+				DA94BADE0DCF070E109181A2 /* Network */,
+				3C6C285217A76779392CA925 /* Security */,
+			);
+			path = Infrastructure;
+			sourceTree = "<group>";
+		};
+		8201A50D50E52749C64ED12F /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				F813F560F8A68FD79AB623E2 /* FileViewModels.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		95E21349401269A6C357627C /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+				8037113FD5B2EB379A049D16 /* OnboardingView.swift */,
+			);
+			path = Onboarding;
+			sourceTree = "<group>";
+		};
+		BC082AE01D29FA85B33D74F0 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				F71BD11D1637B4227434BBFA /* App */,
+				7A2FD60529A89053ECC6C9B6 /* Core */,
+				135917E50474CDB253171350 /* Features */,
+				62A250E996E1B73F608A7648 /* Resources */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		CDC141CB55D83DC27503468A /* Entities */ = {
+			isa = PBXGroup;
+			children = (
+				63D4DA4123D4A2662BA85C69 /* Entities.swift */,
+			);
+			path = Entities;
+			sourceTree = "<group>";
+		};
+		DA94BADE0DCF070E109181A2 /* Network */ = {
+			isa = PBXGroup;
+			children = (
+				D29E43F90769F7BAC703B56B /* ClientFactory.swift */,
+				2CBFFF1BEBC6557CEE7F6C63 /* ConnectionPool.swift */,
+				5FE2FCE36D5956FEC0F209D3 /* FTPClient.swift */,
+				8F229EE36AF0B986EFB9636E /* SFTPClient.swift */,
+				C85ED3AFD83CE107BA714A41 /* TransferEngine.swift */,
+			);
+			path = Network;
+			sourceTree = "<group>";
+		};
+		EB460997489008E23DB9BC74 /* Domain */ = {
+			isa = PBXGroup;
+			children = (
+				CDC141CB55D83DC27503468A /* Entities */,
+				23B45C4B1086CEEE6C14B145 /* Repositories */,
+			);
+			path = Domain;
+			sourceTree = "<group>";
+		};
+		F71BD11D1637B4227434BBFA /* App */ = {
+			isa = PBXGroup;
+			children = (
+				E392E562D7738A45EBAA7ECF /* AppLinks.swift */,
+				99518BAE51DDFE436D991FCB /* AppState.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1F4D2B1E433488BC14B1D5D0 /* SwiftFTPTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2EB225588CF1D16F86702345 /* Build configuration list for PBXNativeTarget "SwiftFTPTests" */;
+			buildPhases = (
+				A1A56C717D7ACD8771DD6A57 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E87C1FF9419F131374CDAF0B /* PBXTargetDependency */,
+			);
+			name = SwiftFTPTests;
+			packageProductDependencies = (
+			);
+			productName = SwiftFTPTests;
+			productReference = FCBF5A99DCAE2C169BEA8DCA /* SwiftFTPTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		7BD9FFFB553C76A5CE07C2A3 /* SwiftFTP */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 913BAF216C7242EBEA2E8CA3 /* Build configuration list for PBXNativeTarget "SwiftFTP" */;
+			buildPhases = (
+				F466B95B0251486166C530F3 /* Sources */,
+				E95CBA01D8B9CE80A3531F69 /* Resources */,
+				4FADA66AB6E7605018326660 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SwiftFTP;
+			packageProductDependencies = (
+				43ED60EBAC288BC90350F5CA /* Citadel */,
+			);
+			productName = SwiftFTP;
+			productReference = F5AE3AD952870A72D8540E56 /* SwiftFTP.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		8A0173BFCF9045FE6531ABFA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					7BD9FFFB553C76A5CE07C2A3 = {
+						DevelopmentTeam = UW4Z5U4U66;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 6B1F86C5043936ABFD41061B /* Build configuration list for PBXProject "SwiftFTP" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 5DA096C0F16BAD7D5EB3926D;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				69E0CA63F192A8D86AFB60B9 /* XCRemoteSwiftPackageReference "Citadel" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 199348A4E62B54AA497BBD8D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7BD9FFFB553C76A5CE07C2A3 /* SwiftFTP */,
+				1F4D2B1E433488BC14B1D5D0 /* SwiftFTPTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E95CBA01D8B9CE80A3531F69 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				125535ACC4F5F913A1EBE3A7 /* Acknowledgements.json in Resources */,
+				16E3C79C12BEC0717BC5B65B /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A1A56C717D7ACD8771DD6A57 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				65C4D7543FBA858446216EAA /* SwiftFTPv2Tests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F466B95B0251486166C530F3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10F71BE7E3FE72E154324F11 /* AboutView.swift in Sources */,
+				605AA6AE2B02B6EC9EB52D1A /* AnyFTPClient.swift in Sources */,
+				C4BC270E374E1F76E59F20B8 /* AppLinks.swift in Sources */,
+				E58BAC579E42958C33B58DA4 /* AppState.swift in Sources */,
+				4EDF22ACA8476CC0A4CFADFE /* ClientFactory.swift in Sources */,
+				E840076FB9823DEC99B7875A /* ConnectionPool.swift in Sources */,
+				45AC706C3A65520379ECC4F2 /* Entities.swift in Sources */,
+				B01C535578933831E603BABF /* FSEventWatcher.swift in Sources */,
+				F6C917493A51FBE761B2FC0E /* FTPClient.swift in Sources */,
+				960A1E764193116F83279635 /* FileBrowserView.swift in Sources */,
+				FF3E18B97A2AE1A525C07CAD /* FileViewModels.swift in Sources */,
+				CA8048F41FEF4734219C9F8D /* KeychainManager.swift in Sources */,
+				E2FA745B60A9E95556E1ECCB /* MainViews.swift in Sources */,
+				D1F40F70CB1071A458976B19 /* OnboardingView.swift in Sources */,
+				7AF829FC955B2C1D0718DA23 /* RealtimeSyncView.swift in Sources */,
+				AB785DD3E7698AE12FE6943C /* SFTPClient.swift in Sources */,
+				75FDAF5CEC56804627572EF6 /* ServerEditView.swift in Sources */,
+				167C312C829CB1BA7DAA49D4 /* ServerRepository.swift in Sources */,
+				ABDC1F2C5FF2CDA13128DE24 /* TransferEngine.swift in Sources */,
+				174C5E03E7335F13AB744E99 /* TransferQueueView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E87C1FF9419F131374CDAF0B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7BD9FFFB553C76A5CE07C2A3 /* SwiftFTP */;
+			targetProxy = 5060395F086CD975A9892D9D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0DEC164D676410DBC57833C8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 3;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		0F0C011B370B97AAE2D72FE0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 3;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		26D8AC37E6EBA4084D6A63C9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_REQUIRED = YES;
+				CODE_SIGN_ENTITLEMENTS = Sources/Resources/SwiftFTP.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = UW4Z5U4U66;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sources/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.swiftftp.app;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+			};
+			name = Release;
+		};
+		80873C2BEAF4BEA29E1D84AC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.swiftftp.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SwiftFTP.app/Contents/MacOS/SwiftFTP";
+			};
+			name = Release;
+		};
+		E5A824A1DF1B254254791EBB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_REQUIRED = YES;
+				CODE_SIGN_ENTITLEMENTS = Sources/Resources/SwiftFTP.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = UW4Z5U4U66;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sources/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.swiftftp.app;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+			};
+			name = Debug;
+		};
+		F11292E1F2B1456F9617ED41 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.swiftftp.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SwiftFTP.app/Contents/MacOS/SwiftFTP";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2EB225588CF1D16F86702345 /* Build configuration list for PBXNativeTarget "SwiftFTPTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F11292E1F2B1456F9617ED41 /* Debug */,
+				80873C2BEAF4BEA29E1D84AC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6B1F86C5043936ABFD41061B /* Build configuration list for PBXProject "SwiftFTP" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F0C011B370B97AAE2D72FE0 /* Debug */,
+				0DEC164D676410DBC57833C8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		913BAF216C7242EBEA2E8CA3 /* Build configuration list for PBXNativeTarget "SwiftFTP" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E5A824A1DF1B254254791EBB /* Debug */,
+				26D8AC37E6EBA4084D6A63C9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		69E0CA63F192A8D86AFB60B9 /* XCRemoteSwiftPackageReference "Citadel" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/orlandos-nl/Citadel.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.7.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		43ED60EBAC288BC90350F5CA /* Citadel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 69E0CA63F192A8D86AFB60B9 /* XCRemoteSwiftPackageReference "Citadel" */;
+			productName = Citadel;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 8A0173BFCF9045FE6531ABFA /* Project object */;
+}
