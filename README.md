@@ -64,6 +64,13 @@ xcodebuild test \
 
 The Xcode project, target, bundle identifier, and persistence paths retain their historical `SwiftFTP` identifiers to preserve compatibility for existing installations. The product name shown to users is Quay.
 
+## Developer documentation
+
+- [Project architecture and development guidance](AGENTS.md)
+- [Swift 6 concurrency and transfer implementation notes](Docs/Swift6_Migration_Guide.md)
+- [Release verification checklist](Docs/Release_Verification.md)
+- [Mainline alignment verification, 2026-10-23](Docs/Verification_2026-10-23.md)
+
 ## Contributing
 
 Bug reports and focused pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change. Please report security issues according to [SECURITY.md](SECURITY.md).
